@@ -70,6 +70,20 @@ function createContextMenus() {
   });
 }
 
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.action === "processFullText") {
+    if (!sender.tab) {
+      console.error("[LLM] sender.tab is undefined!");
+      sendResponse({ success: false, error: "sender.tab is undefined" });
+      return;
+    }
+    processText(request.textAction, request.text, sender.tab, true)
+      .then(() => sendResponse({ success: true }))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true; // Keep channel open for async response
+  }
+});
+
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (!["translate", "expand", "summarize", "grammar"].includes(info.menuItemId)) return;
 
@@ -96,8 +110,12 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   await processText(info.menuItemId, selectedText, tab);
 });
 
-async function processText(action, text, tab) {
+async function processText(action, text, tab, isFullText = false) {
   try {
+    if (!tab || !tab.id) {
+      throw new Error("Tab information missing");
+    }
+    
     const config = await storageGet(Object.keys(DEFAULT_CONFIG));
 
     const promptMap = {
@@ -139,14 +157,16 @@ async function processText(action, text, tab) {
     if (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) {
       const processedText = data.choices[0].message.content;
 
+      const messageAction = isFullText ? "replaceFullText" : "replaceText";
+      
       chrome.tabs.sendMessage(tab.id, {
-        action: "replaceText",
+        action: messageAction,
         text: processedText
       }, () => {
         if (chrome.runtime.lastError) {
           // Content script might not be ready; fallback to executeScript
           console.warn("Content script not available, using fallback");
-          injectReplacement(tab.id, processedText);
+          injectReplacement(tab.id, processedText, messageAction === "replaceFullText");
         }
       });
     } else {
@@ -154,74 +174,88 @@ async function processText(action, text, tab) {
     }
   } catch (error) {
     console.error("LLM API Fehler:", error);
-    chrome.tabs.sendMessage(tab.id, {
-      action: "showError",
-      message: error.message
-    }, () => {
-      if (chrome.runtime.lastError) {
-        console.error("Could not notify content script:", chrome.runtime.lastError);
-      }
-    });
+    if (tab && tab.id) {
+      chrome.tabs.sendMessage(tab.id, {
+        action: "showError",
+        message: error.message
+      }, () => {
+        if (chrome.runtime.lastError) {
+          console.error("Could not notify content script:", chrome.runtime.lastError);
+        }
+      });
+    }
   }
 }
 
 // Fallback: inject replacement code directly if content script is unreachable
-function injectReplacement(tabId, replacementText) {
+function injectReplacement(tabId, replacementText, replaceFull = false) {
   chrome.scripting.executeScript({
     target: { tabId: tabId },
-    func: (newText) => {
+    func: (newText, fullReplace) => {
       const activeElement = document.activeElement;
       if (!activeElement) return;
 
       if (activeElement.tagName === "INPUT" || activeElement.tagName === "TEXTAREA") {
         const el = activeElement;
-        const start = el.selectionStart;
-        const end = el.selectionEnd;
-        if (start !== undefined && end !== undefined && start !== end) {
-          const original = el.value;
-          el.value = original.substring(0, start) + newText + original.substring(end);
-          const newCursor = start + newText.length;
-          el.setSelectionRange(newCursor, newCursor);
+        if (fullReplace) {
+          el.value = newText;
+          el.selectionStart = el.selectionEnd = newText.length;
           el.dispatchEvent(new Event("input", { bubbles: true }));
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+        } else {
+          const start = el.selectionStart;
+          const end = el.selectionEnd;
+          if (start !== undefined && end !== undefined && start !== end) {
+            const original = el.value;
+            el.value = original.substring(0, start) + newText + original.substring(end);
+            const newCursor = start + newText.length;
+            el.setSelectionRange(newCursor, newCursor);
+            el.dispatchEvent(new Event("input", { bubbles: true }));
+          }
         }
       } else if (activeElement.isContentEditable) {
-        const selection = window.getSelection();
-        if (selection.rangeCount > 0) {
-          const range = selection.getRangeAt(0);
-          range.deleteContents();
-
-          // Insert new text, handling newlines as <br> in contenteditable
-          const lines = newText.split("\n");
-          let lastNode = null;
-          
-          lines.forEach((line, index) => {
-            if (line) {
-              const textNode = document.createTextNode(line);
-              range.insertNode(textNode);
-              lastNode = textNode;
-              range.setStartAfter(textNode);
-              range.setEndAfter(textNode);
-            }
-            
-            if (index < lines.length - 1) {
-              const br = document.createElement("br");
-              range.insertNode(br);
-              lastNode = br;
-              range.setStartAfter(br);
-              range.setEndAfter(br);
-            }
-          });
-
-          if (lastNode) {
-            range.setStartAfter(lastNode);
-            range.setEndAfter(lastNode);
-          }
-          selection.removeAllRanges();
-          selection.addRange(range);
+        if (fullReplace) {
+          activeElement.innerText = newText;
           activeElement.dispatchEvent(new Event("input", { bubbles: true }));
+        } else {
+          const selection = window.getSelection();
+          if (selection.rangeCount > 0) {
+            const range = selection.getRangeAt(0);
+            range.deleteContents();
+
+            // Insert new text, handling newlines as <br> in contenteditable
+            const lines = newText.split("\n");
+            let lastNode = null;
+            
+            lines.forEach((line, index) => {
+              if (line) {
+                const textNode = document.createTextNode(line);
+                range.insertNode(textNode);
+                lastNode = textNode;
+                range.setStartAfter(textNode);
+                range.setEndAfter(textNode);
+              }
+              
+              if (index < lines.length - 1) {
+                const br = document.createElement("br");
+                range.insertNode(br);
+                lastNode = br;
+                range.setStartAfter(br);
+                range.setEndAfter(br);
+              }
+            });
+
+            if (lastNode) {
+              range.setStartAfter(lastNode);
+              range.setEndAfter(lastNode);
+            }
+            selection.removeAllRanges();
+            selection.addRange(range);
+            activeElement.dispatchEvent(new Event("input", { bubbles: true }));
+          }
         }
       }
     },
-    args: [replacementText]
+    args: [replacementText, replaceFull]
   });
 }

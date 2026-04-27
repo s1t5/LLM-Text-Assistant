@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LLM Assistent Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; }
+        .test-section { margin: 30px 0; padding: 20px; border: 1px solid #ddd; border-radius: 8px; }
+        label { display: block; margin-bottom: 8px; font-weight: bold; }
+        input, textarea { width: 100%; padding: 10px; font-size: 14px; border: 1px solid #ccc; border-radius: 4px; }
+        textarea { min-height: 100px; resize: vertical; }
+        .contenteditable { 
+            min-height: 100px; 
+            border: 1px solid #ccc; 
+            padding: 10px; 
+            border-radius: 4px;
+            background: white;
+        }
+        h2 { color: #333; }
+    </style>
+</head>
+<body>
+    <h1>🤖 LLM Text Assistent - Testseite</h1>
+    <p>Klicke in eines der Eingabefelder unten. Ein 🤖-Icon sollte oben rechts im Feld erscheinen.</p>
+
+    <div class="test-section">
+        <h2>Input-Feld</h2>
+        <label for="test-input">Einfaches Input:</label>
+        <input type="text" id="test-input" placeholder="Gib hier Text ein..." value="Dies ist ein Testtext für das Input-Feld.">
+    </div>
+
+    <div class="test-section">
+        <h2>Textarea</h2>
+        <label for="test-textarea">Textarea mit mehreren Zeilen:</label>
+        <textarea id="test-textarea">Dies ist ein Testtext für die Textarea.
+Er hat mehrere Zeilen.
+Hier kann man gut sehen, wie die Extension funktioniert.</textarea>
+    </div>
+
+    <div class="test-section">
+        <h2>ContentEditable</h2>
+        <label>Div mit contenteditable="true":</label>
+        <div class="contenteditable" contenteditable="true">
+            <p>Dies ist ein <b>rich text</b> Beispiel.</p>
+            <p>Man kann hier <i>formatierten</i> Text bearbeiten.</p>
+        </div>
+    </div>
+
+    <div class="test-section">
+        <h2>Leeres Feld</h2>
+        <label for="test-empty">Leeres Input (Icon sollte nicht erscheinen oder anders reagieren):</label>
+        <input type="text" id="test-empty" placeholder="Dieses Feld ist leer...">
+    </div>
+
+    <div style="margin-top: 40px; padding: 20px; background: #f5f5f5; border-radius: 8px;">
+        <h3>Anleitung:</h3>
+        <ol>
+            <li>Lade die Extension in Chrome (Entwicklermodus → Entpackte Erweiterung laden)</li>
+            <li>Klicke in eines der Felder oben</li>
+            <li>Das 🤖-Icon sollte oben rechts im Feld erscheinen</li>
+            <li>Klicke auf das Icon → ein Menü öffnet sich mit 4 Aktionen</li>
+            <li>Wähle eine Aktion aus → der gesamte Text wird verarbeitet und ersetzt</li>
+        </ol>
+    </div>
+</body>
+</html>
