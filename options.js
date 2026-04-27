@@ -6,10 +6,10 @@
     apiKey: "",
     model: "gpt-3.5-turbo",
     temperature: "0.3",
-    promptTranslate: "Übersetze den folgenden Text ins Englische. Antworte nur mit der Übersetzung, ohne zusätzliche Erklärungen:",
-    promptExpand: "Formuliere die folgenden Stichpunkte oder Satzfragmente zu einem vollständigen, flüssigen Text aus. Antworte nur mit dem ausformulierten Text:",
-    promptSummarize: "Fasse den folgenden Text kurz und prägnant zusammen. Antworte nur mit der Zusammenfassung:",
-    promptGrammar: "Korrigiere Rechtschreibung, Grammatik und Zeichensetzung im folgenden Text. Antworte nur mit dem korrigierten Text:"
+    promptTranslate: "Übersetze den folgenden Text ins Englische. Behalte die Formatierung, Absätze und Zeilenumbrüche genau bei. Antworte nur mit der Übersetzung, ohne zusätzliche Erklärungen:",
+    promptExpand: "Formuliere die folgenden Stichpunkte oder Satzfragmente zu einem vollständigen, flüssigen Text aus. Behalte die Formatierung, Absätze und Zeilenumbrüche bei. Antworte nur mit dem ausformulierten Text:",
+    promptSummarize: "Fasse den folgenden Text kurz und prägnant zusammen. Behalte die Formatierung, Absätze und Zeilenumbrüche bei. Antworte nur mit der Zusammenfassung:",
+    promptGrammar: "Korrigiere Rechtschreibung, Grammatik und Zeichensetzung im folgenden Text. Behalte die Formatierung, Absätze und Zeilenumbrüche bei. Antworte nur mit dem korrigierten Text:"
   };
 
   const FIELDS = [

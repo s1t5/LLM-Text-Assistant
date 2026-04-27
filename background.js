@@ -4,10 +4,10 @@ const DEFAULT_CONFIG = {
   apiKey: "",
   model: "gpt-3.5-turbo",
   temperature: "0.3",
-  promptTranslate: "Übersetze den folgenden Text ins Englische. Antworte nur mit der Übersetzung, ohne zusätzliche Erklärungen:",
-  promptExpand: "Formuliere die folgenden Stichpunkte oder Satzfragmente zu einem vollständigen, flüssigen Text aus. Antworte nur mit dem ausformulierten Text:",
-  promptSummarize: "Fasse den folgenden Text kurz und prägnant zusammen. Antworte nur mit der Zusammenfassung:",
-  promptGrammar: "Korrigiere Rechtschreibung, Grammatik und Zeichensetzung im folgenden Text. Antworte nur mit dem korrigierten Text:"
+  promptTranslate: "Übersetze den folgenden Text ins Englische. Behalte die Formatierung, Absätze und Zeilenumbrüche genau bei. Antworte nur mit der Übersetzung, ohne zusätzliche Erklärungen:",
+  promptExpand: "Formuliere die folgenden Stichpunkte oder Satzfragmente zu einem vollständigen, flüssigen Text aus. Behalte die Formatierung, Absätze und Zeilenumbrüche bei. Antworte nur mit dem ausformulierten Text:",
+  promptSummarize: "Fasse den folgenden Text kurz und prägnant zusammen. Behalte die Formatierung, Absätze und Zeilenumbrüche bei. Antworte nur mit der Zusammenfassung:",
+  promptGrammar: "Korrigiere Rechtschreibung, Grammatik und Zeichensetzung im folgenden Text. Behalte die Formatierung, Absätze und Zeilenumbrüche bei. Antworte nur mit dem korrigierten Text:"
 };
 
 // Promise wrappers for Chrome storage API
@@ -73,7 +73,21 @@ function createContextMenus() {
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (!["translate", "expand", "summarize", "grammar"].includes(info.menuItemId)) return;
 
-  const selectedText = info.selectionText || "";
+  let selectedText = info.selectionText || "";
+  
+  // Try to get better formatted text with line breaks via executeScript
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => window.getSelection().toString()
+    });
+    if (results && results[0] && results[0].result) {
+      selectedText = results[0].result;
+    }
+  } catch (e) {
+    console.warn("Could not execute script to get selection, falling back to selectionText");
+  }
+
   if (!selectedText.trim()) {
     console.warn("No text selected");
     return;
@@ -123,7 +137,7 @@ async function processText(action, text, tab) {
     const data = await response.json();
 
     if (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) {
-      const processedText = data.choices[0].message.content.trim();
+      const processedText = data.choices[0].message.content;
 
       chrome.tabs.sendMessage(tab.id, {
         action: "replaceText",
@@ -175,10 +189,33 @@ function injectReplacement(tabId, replacementText) {
         if (selection.rangeCount > 0) {
           const range = selection.getRangeAt(0);
           range.deleteContents();
-          const textNode = document.createTextNode(newText);
-          range.insertNode(textNode);
-          range.setStartAfter(textNode);
-          range.setEndAfter(textNode);
+
+          // Insert new text, handling newlines as <br> in contenteditable
+          const lines = newText.split("\n");
+          let lastNode = null;
+          
+          lines.forEach((line, index) => {
+            if (line) {
+              const textNode = document.createTextNode(line);
+              range.insertNode(textNode);
+              lastNode = textNode;
+              range.setStartAfter(textNode);
+              range.setEndAfter(textNode);
+            }
+            
+            if (index < lines.length - 1) {
+              const br = document.createElement("br");
+              range.insertNode(br);
+              lastNode = br;
+              range.setStartAfter(br);
+              range.setEndAfter(br);
+            }
+          });
+
+          if (lastNode) {
+            range.setStartAfter(lastNode);
+            range.setEndAfter(lastNode);
+          }
           selection.removeAllRanges();
           selection.addRange(range);
           activeElement.dispatchEvent(new Event("input", { bubbles: true }));

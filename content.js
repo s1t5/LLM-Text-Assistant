@@ -67,13 +67,33 @@
       // Delete selected content
       range.deleteContents();
 
-      // Insert new text
-      const textNode = document.createTextNode(newText);
-      range.insertNode(textNode);
+      // Insert new text, handling newlines as <br> in contenteditable
+      const lines = newText.split("\n");
+      let lastNode = null;
+      
+      lines.forEach((line, index) => {
+        if (line) {
+          const textNode = document.createTextNode(line);
+          range.insertNode(textNode);
+          lastNode = textNode;
+          range.setStartAfter(textNode);
+          range.setEndAfter(textNode);
+        }
+        
+        if (index < lines.length - 1) {
+          const br = document.createElement("br");
+          range.insertNode(br);
+          lastNode = br;
+          range.setStartAfter(br);
+          range.setEndAfter(br);
+        }
+      });
 
       // Move cursor after inserted text
-      range.setStartAfter(textNode);
-      range.setEndAfter(textNode);
+      if (lastNode) {
+        range.setStartAfter(lastNode);
+        range.setEndAfter(lastNode);
+      }
       selection.removeAllRanges();
       selection.addRange(range);
 
