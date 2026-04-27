@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <title>LLM Text Assistent – Einstellungen</title>
+  <style>
+    :root {
+      --bg: #f5f7fa;
+      --card: #ffffff;
+      --text: #2c3e50;
+      --label: #5a6a7a;
+      --accent: #3498db;
+      --accent-hover: #2980b9;
+      --border: #d0d7de;
+      --success: #2ecc71;
+      --error: #e74c3c;
+      --font: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      padding: 40px 20px;
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+    }
+
+    .container {
+      max-width: 720px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 1.6rem;
+      font-weight: 600;
+    }
+
+    p.subtitle {
+      margin: 0 0 28px;
+      color: var(--label);
+      font-size: 0.95rem;
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.04);
+    }
+
+    .card h2 {
+      margin: 0 0 16px;
+      font-size: 1.1rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .field {
+      margin-bottom: 18px;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 0.88rem;
+      font-weight: 500;
+      color: var(--label);
+    }
+
+    input[type="text"],
+    input[type="number"],
+    input[type="password"],
+    textarea {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-family: var(--font);
+      font-size: 0.95rem;
+      color: var(--text);
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    input:focus,
+    textarea:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(52,152,219,0.15);
+    }
+
+    textarea {
+      resize: vertical;
+      min-height: 80px;
+      line-height: 1.5;
+    }
+
+    .hint {
+      font-size: 0.82rem;
+      color: var(--label);
+      margin-top: 4px;
+    }
+
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-top: 8px;
+    }
+
+    button {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 22px;
+      font-family: var(--font);
+      font-size: 0.95rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.2s, transform 0.1s;
+    }
+
+    button:hover {
+      background: var(--accent-hover);
+    }
+
+    button:active {
+      transform: translateY(1px);
+    }
+
+    button.secondary {
+      background: #e2e8f0;
+      color: var(--text);
+    }
+
+    button.secondary:hover {
+      background: #cbd5e1;
+    }
+
+    #status {
+      font-size: 0.9rem;
+      font-weight: 500;
+      min-height: 1.4em;
+    }
+
+    #status.success { color: var(--success); }
+    #status.error   { color: var(--error); }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    @media (max-width: 560px) {
+      .grid-2 { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>LLM Text Assistent</h1>
+    <p class="subtitle">Konfiguriere deine API und die System-Prompts für die Textverarbeitung.</p>
+
+    <div class="card">
+      <h2>🔌 API-Konfiguration</h2>
+      <div class="field">
+        <label for="apiUrl">API URL</label>
+        <input type="text" id="apiUrl" placeholder="https://api.openai.com/v1/chat/completions">
+        <div class="hint">z. B. OpenAI, Ollama (<code>http://localhost:11434/v1/chat/completions</code>) oder LM Studio</div>
+      </div>
+
+      <div class="grid-2">
+        <div class="field">
+          <label for="apiKey">API Key</label>
+          <input type="password" id="apiKey" placeholder="sk-...">
+          <div class="hint">Bei lokalen Endpunkten leer lassen</div>
+        </div>
+        <div class="field">
+          <label for="model">Modell</label>
+          <input type="text" id="model" placeholder="gpt-3.5-turbo">
+          <div class="hint">z. B. gpt-4, llama2, mistral</div>
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="temperature">Temperature</label>
+        <input type="number" id="temperature" min="0" max="2" step="0.1" placeholder="0.3">
+        <div class="hint">0 = deterministisch, 2 = sehr kreativ (Standard: 0.3)</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>📝 System-Prompts</h2>
+      <div class="field">
+        <label for="promptTranslate">🌐 Übersetzen</label>
+        <textarea id="promptTranslate"></textarea>
+      </div>
+      <div class="field">
+        <label for="promptExpand">✍️ Ausformulieren</label>
+        <textarea id="promptExpand"></textarea>
+      </div>
+      <div class="field">
+        <label for="promptSummarize">📋 Zusammenfassen</label>
+        <textarea id="promptSummarize"></textarea>
+      </div>
+      <div class="field">
+        <label for="promptGrammar">✅ Rechtschreibung & Grammatik</label>
+        <textarea id="promptGrammar"></textarea>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button id="saveBtn">💾 Speichern</button>
+      <button id="resetBtn" class="secondary">↩️ Auf Standard zurücksetzen</button>
+      <span id="status"></span>
+    </div>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>
