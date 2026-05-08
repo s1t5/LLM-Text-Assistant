@@ -1,6 +1,8 @@
 (function() {
   'use strict';
 
+  // --- Constants ---
+
   const DEFAULTS = {
     apiUrl: "https://api.openai.com/v1/chat/completions",
     apiKey: "",
@@ -9,10 +11,12 @@
     promptTranslate: "Übersetze den folgenden Text ins Englische. Behalte die Formatierung, Absätze und Zeilenumbrüche genau bei. Antworte nur mit der Übersetzung, ohne zusätzliche Erklärungen:",
     promptExpand: "Formuliere die folgenden Stichpunkte oder Satzfragmente zu einem vollständigen, flüssigen Text aus. Behalte die Formatierung, Absätze und Zeilenumbrüche bei. Antworte nur mit dem ausformulierten Text:",
     promptSummarize: "Fasse den folgenden Text kurz und prägnant zusammen. Behalte die Formatierung, Absätze und Zeilenumbrüche bei. Antworte nur mit der Zusammenfassung:",
-    promptGrammar: "Korrigiere Rechtschreibung, Grammatik und Zeichensetzung im folgenden Text. Behalte die Formatierung, Absätze und Zeilenumbrüche bei. Antworte nur mit dem korrigierten Text:"
+    promptGrammar: "Korrigiere Rechtschreibung, Grammatik und Zeichensetzung im folgenden Text. Behalte die Formatierung, Absätze und Zeilenumbrüche bei. Antworte nur mit dem korrigierten Text:",
+    customActions: [],
+    freePromptEnabled: true
   };
 
-  const FIELDS = [
+  const BUILTIN_FIELDS = [
     "apiUrl",
     "apiKey",
     "model",
@@ -20,31 +24,195 @@
     "promptTranslate",
     "promptExpand",
     "promptSummarize",
-    "promptGrammar"
+    "promptGrammar",
+    "customActions",
+    "freePromptEnabled"
   ];
+
+  // --- State ---
+
+  let customActions = [];
+
+  // --- DOM Helpers ---
+
+  function $(id) { return document.getElementById(id); }
+
+  function el(tag, attrs = {}, children = []) {
+    const e = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (k === 'style' && typeof v === 'object') {
+        Object.assign(e.style, v);
+      } else if (k === 'className') {
+        e.className = v;
+      } else if (k.startsWith('on')) {
+        e.addEventListener(k.slice(2).toLowerCase(), v);
+      } else {
+        e.setAttribute(k, v);
+      }
+    }
+    for (const child of children) {
+      if (typeof child === 'string') {
+        e.appendChild(document.createTextNode(child));
+      } else if (child) {
+        e.appendChild(child);
+      }
+    }
+    return e;
+  }
+
+  // --- Custom Actions UI ---
+
+  function renderCustomActions() {
+    const list = $('customActionsList');
+    list.innerHTML = '';
+
+    customActions.forEach((action, index) => {
+      const entry = el('div', { className: 'custom-action-entry' }, [
+        el('div', { className: 'custom-action-header' }, [
+          el('h3', {}, [`Aktion #${index + 1}`]),
+          el('button', {
+            className: 'danger small',
+            onClick: (e) => {
+              e.preventDefault();
+              customActions.splice(index, 1);
+              renderCustomActions();
+            }
+          }, ['🗑 Entfernen'])
+        ]),
+        el('div', { className: 'custom-action-row' }, [
+          el('label', {}, ['Emoji']),
+          el('input', {
+            type: 'text',
+            className: 'ca-emoji',
+            value: action.emoji || '⚡',
+            placeholder: '⚡',
+            maxlength: '4',
+            onInput: () => syncCustomActionsFromDOM()
+          })
+        ]),
+        el('div', { className: 'custom-action-row' }, [
+          el('label', {}, ['Titel']),
+          el('input', {
+            type: 'text',
+            className: 'ca-title',
+            value: action.title || '',
+            placeholder: 'Aktionstitel',
+            maxlength: '40',
+            onInput: () => syncCustomActionsFromDOM()
+          })
+        ]),
+        el('div', { className: 'custom-action-row' }, [
+          el('label', {}, ['Prompt']),
+          el('textarea', {
+            className: 'ca-prompt',
+            placeholder: 'System-Prompt für diese Aktion...',
+            rows: '3',
+            onInput: () => syncCustomActionsFromDOM()
+          }, [action.prompt || ''])
+        ]),
+        el('div', { className: 'toggle-row' }, [
+          el('span', { className: 'toggle-label' }, ['Im Kontextmenü anzeigen']),
+          el('label', { className: 'toggle-switch' }, [
+            el('input', {
+              type: 'checkbox',
+              className: 'ca-contextmenu',
+              checked: action.showInContextMenu !== false,
+              onChange: () => syncCustomActionsFromDOM()
+            }),
+            el('span', { className: 'toggle-slider' })
+          ])
+        ])
+      ]);
+
+      list.appendChild(entry);
+    });
+  }
+
+  function syncCustomActionsFromDOM() {
+    const entries = document.querySelectorAll('#customActionsList .custom-action-entry');
+    const actions = [];
+    entries.forEach(entry => {
+      const emojiInput = entry.querySelector('.ca-emoji');
+      const titleInput = entry.querySelector('.ca-title');
+      const promptArea = entry.querySelector('.ca-prompt');
+      const contextCheckbox = entry.querySelector('.ca-contextmenu');
+
+      actions.push({
+        emoji: emojiInput ? emojiInput.value.trim() || '⚡' : '⚡',
+        title: titleInput ? titleInput.value.trim() : '',
+        prompt: promptArea ? promptArea.value : '',
+        showInContextMenu: contextCheckbox ? contextCheckbox.checked : true
+      });
+    });
+    customActions = actions;
+  }
+
+  function addNewAction() {
+    customActions.push({
+      emoji: '⚡',
+      title: '',
+      prompt: '',
+      showInContextMenu: true
+    });
+    renderCustomActions();
+  }
+
+  // --- Lifecycle ---
 
   document.addEventListener("DOMContentLoaded", () => {
     restoreOptions();
 
-    document.getElementById("saveBtn").addEventListener("click", saveOptions);
-    document.getElementById("resetBtn").addEventListener("click", resetOptions);
+    $("saveBtn").addEventListener("click", saveOptions);
+    $("resetBtn").addEventListener("click", resetOptions);
+    $("addActionBtn").addEventListener("click", (e) => {
+      e.preventDefault();
+      addNewAction();
+    });
   });
 
+  // --- Restore ---
+
   function restoreOptions() {
-    chrome.storage.sync.get(FIELDS, (result) => {
-      for (const key of FIELDS) {
-        const el = document.getElementById(key);
+    chrome.storage.sync.get(BUILTIN_FIELDS, (result) => {
+      // Built-in fields
+      for (const key of BUILTIN_FIELDS) {
+        if (key === 'customActions') continue; // handled separately
+        if (key === 'freePromptEnabled') {
+          const el = $('freePromptEnabled');
+          if (el) el.checked = result[key] !== undefined ? result[key] : DEFAULTS[key];
+          continue;
+        }
+        const el = $(key);
         if (el) {
           el.value = result[key] !== undefined ? result[key] : DEFAULTS[key];
         }
       }
+
+      // Custom actions
+      customActions = Array.isArray(result.customActions) && result.customActions.length > 0
+        ? JSON.parse(JSON.stringify(result.customActions))
+        : [];
+      renderCustomActions();
     });
   }
 
+  // --- Save ---
+
   function saveOptions() {
+    syncCustomActionsFromDOM();
+
     const values = {};
-    for (const key of FIELDS) {
-      const el = document.getElementById(key);
+    for (const key of BUILTIN_FIELDS) {
+      if (key === 'customActions') {
+        values[key] = customActions.filter(a => a.title.trim() !== '');
+        continue;
+      }
+      if (key === 'freePromptEnabled') {
+        const cb = $('freePromptEnabled');
+        values[key] = cb ? cb.checked : DEFAULTS[key];
+        continue;
+      }
+      const el = $(key);
       values[key] = el ? el.value.trim() : "";
     }
 
@@ -53,9 +221,11 @@
         showStatus("Fehler beim Speichern: " + chrome.runtime.lastError.message, "error");
         return;
       }
-      showStatus("Einstellungen gespeichert!", "success");
+      showStatus("✅ Einstellungen gespeichert!", "success");
     });
   }
+
+  // --- Reset ---
 
   function resetOptions() {
     if (!confirm("Möchtest du wirklich alle Einstellungen auf die Standardwerte zurücksetzen?")) {
@@ -67,13 +237,16 @@
         showStatus("Fehler beim Zurücksetzen: " + chrome.runtime.lastError.message, "error");
         return;
       }
+      customActions = [];
       restoreOptions();
-      showStatus("Standardwerte wiederhergestellt.", "success");
+      showStatus("✅ Standardwerte wiederhergestellt.", "success");
     });
   }
 
+  // --- Status ---
+
   function showStatus(message, type) {
-    const statusEl = document.getElementById("status");
+    const statusEl = $("status");
     statusEl.textContent = message;
     statusEl.className = type;
 

@@ -7,13 +7,40 @@
   let actionMenu = null;
   let hideTimeout = null;
 
-  // Actions configuration
-  const ACTIONS = [
+  // Dynamic actions (loaded from storage)
+  let builtinActions = [
     { id: "translate", title: "🌐 Übersetzen", label: "Ins Englische übersetzen" },
     { id: "expand", title: "✍️ Ausformulieren", label: "Ausformulieren" },
     { id: "summarize", title: "📋 Zusammenfassen", label: "Zusammenfassen" },
     { id: "grammar", title: "✅ Rechtschreibung & Grammatik", label: "Korrigieren" }
   ];
+  let customActions = [];
+  let freePromptEnabled = true;
+
+  // --- Load actions from background ---
+
+  function loadActions() {
+    chrome.runtime.sendMessage({ action: "loadActions" }, (response) => {
+      if (chrome.runtime.lastError) {
+        console.warn("[LLM Content] Could not load actions:", chrome.runtime.lastError.message);
+        return;
+      }
+      if (response && response.success && response.actions) {
+        if (response.actions.builtin) {
+          builtinActions = response.actions.builtin;
+        }
+        customActions = Array.isArray(response.actions.custom) ? response.actions.custom : [];
+        freePromptEnabled = response.actions.freePromptEnabled !== false;
+
+        // Rebuild action menu if it exists
+        if (actionMenu) {
+          actionMenu.remove();
+          actionMenu = null;
+          createActionMenu();
+        }
+      }
+    });
+  }
 
   // Listen for messages from background script
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -32,6 +59,7 @@
 
   // Initialize: attach focus listeners to all existing editable elements
   function init() {
+    loadActions();
     attachListeners(document.body);
     
     // Watch for dynamically added elements
@@ -46,6 +74,13 @@
     });
     
     observer.observe(document.body, { childList: true, subtree: true });
+
+    // Listen for storage changes to reload actions
+    chrome.storage.onChanged.addListener((changes, namespace) => {
+      if (namespace === 'sync' && (changes.customActions || changes.freePromptEnabled)) {
+        loadActions();
+      }
+    });
   }
 
   function attachListeners(root) {
@@ -81,6 +116,12 @@
     
     // Check if click is on our action menu
     if (actionMenu && (actionMenu === target || actionMenu.contains(target))) {
+      return;
+    }
+    
+    // Check if click is on the chat window
+    const chatContainer = document.getElementById('llm-chat-overlay');
+    if (chatContainer && (chatContainer === target || chatContainer.contains(target))) {
       return;
     }
     
@@ -218,10 +259,15 @@
 
     // Position menu below the icon, aligned to right edge
     const top = iconRect.bottom + scrollY + 4;
-    let left = iconRect.left + scrollX - 156 + 24; // menu width (180) - icon width (24), align right
+    const menuWidth = 220;
+    let left = iconRect.left + scrollX - menuWidth + 24; // align right
 
     // Prevent going off-screen left
     if (left < 4) left = 4;
+    // Prevent going off-screen right
+    if (left + menuWidth > window.innerWidth) {
+      left = window.innerWidth - menuWidth - 4;
+    }
     
     Object.assign(actionMenu.style, {
       top: `${top}px`,
@@ -243,12 +289,17 @@
   }
 
   function createActionMenu() {
+    if (actionMenu) {
+      actionMenu.remove();
+    }
+
     actionMenu = document.createElement('div');
     actionMenu.id = 'llm-assistant-menu';
     
     Object.assign(actionMenu.style, {
       position: 'absolute',
-      width: '180px',
+      minWidth: '200px',
+      maxWidth: '260px',
       backgroundColor: 'white',
       borderRadius: '8px',
       boxShadow: '0 4px 16px rgba(0,0,0,0.2)',
@@ -274,14 +325,57 @@
     });
     actionMenu.appendChild(header);
 
-    // Action items
-    for (const action of ACTIONS) {
-      const item = document.createElement('div');
-      item.className = 'llm-action-item';
-      item.dataset.action = action.id;
-      item.textContent = action.title;
+    // Built-in action items
+    for (const action of builtinActions) {
+      actionMenu.appendChild(createActionMenuItem(action.id, action.title));
+    }
+
+    // Custom action items
+    if (customActions.length > 0) {
+      // Separator
+      const sep = document.createElement('div');
+      Object.assign(sep.style, {
+        height: '1px',
+        backgroundColor: '#eee',
+        margin: '4px 8px'
+      });
+      actionMenu.appendChild(sep);
+
+      const customHeader = document.createElement('div');
+      customHeader.textContent = 'Eigene Aktionen';
+      Object.assign(customHeader.style, {
+        padding: '6px 10px',
+        fontWeight: '600',
+        color: '#888',
+        fontSize: '11px',
+        textTransform: 'uppercase',
+        letterSpacing: '0.4px'
+      });
+      actionMenu.appendChild(customHeader);
+
+      customActions.forEach((action, index) => {
+        const actionId = `custom_${index}`;
+        const emoji = action.emoji || '⚡';
+        actionMenu.appendChild(createActionMenuItem(actionId, `${emoji} ${action.title}`, actionId));
+      });
+    }
+
+    // Free Prompt entry
+    if (freePromptEnabled) {
+      const fepSep = document.createElement('div');
+      Object.assign(fepSep.style, {
+        height: '1px',
+        backgroundColor: '#eee',
+        margin: '4px 8px'
+      });
+      actionMenu.appendChild(fepSep);
+
+      const freePromptItem = document.createElement('div');
+      freePromptItem.className = 'llm-action-item';
+      freePromptItem.dataset.action = 'freePrompt';
+      freePromptItem.textContent = '💬 Freier Prompt';
       
-      Object.assign(item.style, {
+      Object.assign(freePromptItem.style, {
         padding: '8px 10px',
         cursor: 'pointer',
         borderRadius: '4px',
@@ -289,24 +383,26 @@
         transition: 'background-color 0.1s ease',
         whiteSpace: 'nowrap',
         overflow: 'hidden',
-        textOverflow: 'ellipsis'
+        textOverflow: 'ellipsis',
+        color: '#2563a8',
+        fontWeight: '500'
       });
 
-      item.addEventListener('mouseenter', () => {
-        item.style.backgroundColor = '#f0f4f8';
+      freePromptItem.addEventListener('mouseenter', () => {
+        freePromptItem.style.backgroundColor = '#f0f4f8';
       });
       
-      item.addEventListener('mouseleave', () => {
-        item.style.backgroundColor = 'transparent';
+      freePromptItem.addEventListener('mouseleave', () => {
+        freePromptItem.style.backgroundColor = 'transparent';
       });
       
-      item.addEventListener('mousedown', (e) => {
+      freePromptItem.addEventListener('mousedown', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        executeAction(action.id);
+        openFreePromptChat();
       });
 
-      actionMenu.appendChild(item);
+      actionMenu.appendChild(freePromptItem);
     }
 
     // Prevent menu from causing blur
@@ -329,6 +425,41 @@
     });
 
     document.body.appendChild(actionMenu);
+  }
+
+  function createActionMenuItem(actionId, displayTitle) {
+    const item = document.createElement('div');
+    item.className = 'llm-action-item';
+    item.dataset.action = actionId;
+    item.textContent = displayTitle;
+    
+    Object.assign(item.style, {
+      padding: '8px 10px',
+      cursor: 'pointer',
+      borderRadius: '4px',
+      margin: '2px 0',
+      transition: 'background-color 0.1s ease',
+      whiteSpace: 'nowrap',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      color: '#2c3e50'
+    });
+
+    item.addEventListener('mouseenter', () => {
+      item.style.backgroundColor = '#f0f4f8';
+    });
+    
+    item.addEventListener('mouseleave', () => {
+      item.style.backgroundColor = 'transparent';
+    });
+    
+    item.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      executeAction(actionId);
+    });
+
+    return item;
   }
 
   function executeAction(actionId) {
@@ -370,6 +501,356 @@
     return '';
   }
 
+  // =====================================================================
+  //  FREE PROMPT CHAT WINDOW
+  // =====================================================================
+
+  let chatWindow = null;
+  let chatMessages = []; // Conversation history for the current chat session
+  let pendingElement = null;
+
+  function openFreePromptChat() {
+    if (!activeInputElement) return;
+    pendingElement = activeInputElement;
+
+    hideActionMenu();
+    hideFloatingIcon();
+
+    // Remove existing chat window if any
+    const existing = document.getElementById('llm-chat-overlay');
+    if (existing) existing.remove();
+
+    // Reset conversation — start fresh with a system prompt for text modification
+    chatMessages = [
+      {
+        role: "system",
+        content: "Du bist ein hilfreicher Text-Assistent. Bearbeite und formuliere Text anhand der Anweisungen des Nutzers. Antworte nur mit dem verarbeiteten Text, ohne zusätzliche Erklärungen, es sei denn, der Nutzer bittet darum."
+      }
+    ];
+
+    // Create overlay
+    chatWindow = document.createElement('div');
+    chatWindow.id = 'llm-chat-overlay';
+    Object.assign(chatWindow.style, {
+      position: 'fixed',
+      bottom: '20px',
+      right: '20px',
+      width: '420px',
+      maxHeight: '500px',
+      backgroundColor: '#ffffff',
+      borderRadius: '12px',
+      boxShadow: '0 8px 32px rgba(0,0,0,0.25)',
+      zIndex: '2147483647',
+      display: 'flex',
+      flexDirection: 'column',
+      fontFamily: 'system-ui, -apple-system, sans-serif',
+      fontSize: '14px',
+      overflow: 'hidden',
+      border: '1px solid #d0d7de'
+    });
+
+    // --- Header ---
+    const header = document.createElement('div');
+    Object.assign(header.style, {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      padding: '12px 16px',
+      backgroundColor: '#4a90d9',
+      color: '#fff',
+      fontWeight: '600',
+      fontSize: '15px',
+      cursor: 'move'
+    });
+    header.innerHTML = '<span>💬 Freier Prompt</span>';
+
+    const closeBtn = document.createElement('span');
+    closeBtn.textContent = '✕';
+    Object.assign(closeBtn.style, {
+      cursor: 'pointer',
+      fontSize: '18px',
+      padding: '0 4px',
+      opacity: '0.8',
+      transition: 'opacity 0.15s'
+    });
+    closeBtn.addEventListener('mouseenter', () => { closeBtn.style.opacity = '1'; });
+    closeBtn.addEventListener('mouseleave', () => { closeBtn.style.opacity = '0.8'; });
+    closeBtn.addEventListener('click', () => {
+      closeChatWindow();
+    });
+    header.appendChild(closeBtn);
+
+    // --- Messages area ---
+    const messagesArea = document.createElement('div');
+    messagesArea.id = 'llm-chat-messages';
+    Object.assign(messagesArea.style, {
+      flex: '1 1 auto',
+      overflowY: 'auto',
+      padding: '12px',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '8px',
+      maxHeight: '320px',
+      minHeight: '120px',
+      backgroundColor: '#f8f9fa'
+    });
+
+    // Welcome message
+    addChatMessage('assistant', 'Beschreibe, was mit deinem Text passieren soll. Du kannst mehrere Anweisungen nacheinander senden. Klicke auf **Übernehmen**, um das Ergebnis ins Textfeld einzusetzen.', messagesArea);
+
+    // --- Input area ---
+    const inputArea = document.createElement('div');
+    Object.assign(inputArea.style, {
+      display: 'flex',
+      borderTop: '1px solid #e0e0e0',
+      padding: '10px 12px',
+      gap: '8px',
+      backgroundColor: '#fff'
+    });
+
+    const inputField = document.createElement('input');
+    inputField.type = 'text';
+    inputField.placeholder = 'Anweisung eingeben...';
+    Object.assign(inputField.style, {
+      flex: '1',
+      padding: '8px 12px',
+      border: '1px solid #d0d7de',
+      borderRadius: '6px',
+      fontSize: '14px',
+      fontFamily: 'system-ui, -apple-system, sans-serif',
+      outline: 'none'
+    });
+    inputField.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendChatMessage(inputField, messagesArea);
+      }
+    });
+
+    const sendBtn = document.createElement('button');
+    sendBtn.textContent = 'Senden';
+    Object.assign(sendBtn.style, {
+      padding: '8px 16px',
+      backgroundColor: '#4a90d9',
+      color: '#fff',
+      border: 'none',
+      borderRadius: '6px',
+      cursor: 'pointer',
+      fontWeight: '500',
+      fontSize: '13px',
+      transition: 'background-color 0.15s'
+    });
+    sendBtn.addEventListener('mouseenter', () => { sendBtn.style.backgroundColor = '#3a7bc8'; });
+    sendBtn.addEventListener('mouseleave', () => { sendBtn.style.backgroundColor = '#4a90d9'; });
+    sendBtn.addEventListener('click', () => {
+      sendChatMessage(inputField, messagesArea);
+    });
+
+    inputArea.appendChild(inputField);
+    inputArea.appendChild(sendBtn);
+
+    // --- Footer with "Übernehmen" button ---
+    const footer = document.createElement('div');
+    Object.assign(footer.style, {
+      display: 'flex',
+      justifyContent: 'flex-end',
+      padding: '8px 16px 12px',
+      borderTop: '1px solid #eee',
+      backgroundColor: '#fff',
+      gap: '8px'
+    });
+
+    const resetBtn = document.createElement('button');
+    resetBtn.textContent = '↺ Zurücksetzen';
+    Object.assign(resetBtn.style, {
+      padding: '7px 14px',
+      backgroundColor: '#e2e8f0',
+      color: '#2c3e50',
+      border: 'none',
+      borderRadius: '6px',
+      cursor: 'pointer',
+      fontWeight: '500',
+      fontSize: '13px',
+      transition: 'background-color 0.15s'
+    });
+    resetBtn.addEventListener('mouseenter', () => { resetBtn.style.backgroundColor = '#cbd5e1'; });
+    resetBtn.addEventListener('mouseleave', () => { resetBtn.style.backgroundColor = '#e2e8f0'; });
+    resetBtn.addEventListener('click', () => {
+      resetChatSession(messagesArea);
+    });
+
+    const applyBtn = document.createElement('button');
+    applyBtn.textContent = '✓ Übernehmen';
+    Object.assign(applyBtn.style, {
+      padding: '7px 18px',
+      backgroundColor: '#2ecc71',
+      color: '#fff',
+      border: 'none',
+      borderRadius: '6px',
+      cursor: 'pointer',
+      fontWeight: '600',
+      fontSize: '13px',
+      transition: 'background-color 0.15s'
+    });
+    applyBtn.addEventListener('mouseenter', () => { applyBtn.style.backgroundColor = '#27ae60'; });
+    applyBtn.addEventListener('mouseleave', () => { applyBtn.style.backgroundColor = '#2ecc71'; });
+    applyBtn.addEventListener('click', () => {
+      applyLastResult();
+    });
+
+    footer.appendChild(resetBtn);
+    footer.appendChild(applyBtn);
+
+    // Assemble
+    chatWindow.appendChild(header);
+    chatWindow.appendChild(messagesArea);
+    chatWindow.appendChild(inputArea);
+    chatWindow.appendChild(footer);
+
+    document.body.appendChild(chatWindow);
+
+    // Focus input
+    setTimeout(() => inputField.focus(), 100);
+  }
+
+  function resetChatSession(messagesArea) {
+    chatMessages = [
+      {
+        role: "system",
+        content: "Du bist ein hilfreicher Text-Assistent. Bearbeite und formuliere Text anhand der Anweisungen des Nutzers. Antworte nur mit dem verarbeiteten Text, ohne zusätzliche Erklärungen, es sei denn, der Nutzer bittet darum."
+      }
+    ];
+    messagesArea.innerHTML = '';
+    addChatMessage('assistant', 'Chat zurückgesetzt. Was möchtest du mit deinem Text machen?', messagesArea);
+  }
+
+  function addChatMessage(role, content, messagesArea) {
+    const msgDiv = document.createElement('div');
+    const isUser = role === 'user';
+    
+    Object.assign(msgDiv.style, {
+      alignSelf: isUser ? 'flex-end' : 'flex-start',
+      maxWidth: '85%',
+      padding: '8px 12px',
+      borderRadius: '10px',
+      backgroundColor: isUser ? '#4a90d9' : '#e9ecef',
+      color: isUser ? '#fff' : '#2c3e50',
+      fontSize: '14px',
+      lineHeight: '1.5',
+      wordWrap: 'break-word',
+      whiteSpace: 'pre-wrap',
+      boxShadow: '0 1px 2px rgba(0,0,0,0.05)'
+    });
+
+    // Render simple markdown bold
+    let html = content
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\n/g, '<br>');
+    msgDiv.innerHTML = html;
+
+    messagesArea.appendChild(msgDiv);
+    messagesArea.scrollTop = messagesArea.scrollHeight;
+  }
+
+  function sendChatMessage(inputField, messagesArea) {
+    const userMessage = inputField.value.trim();
+    if (!userMessage) return;
+
+    // Add user message to chat
+    addChatMessage('user', userMessage, messagesArea);
+    chatMessages.push({ role: 'user', content: userMessage });
+    inputField.value = '';
+    inputField.disabled = true;
+
+    // Show typing indicator
+    const typingDiv = document.createElement('div');
+    Object.assign(typingDiv.style, {
+      alignSelf: 'flex-start',
+      padding: '8px 12px',
+      borderRadius: '10px',
+      backgroundColor: '#e9ecef',
+      color: '#888',
+      fontSize: '13px',
+      fontStyle: 'italic'
+    });
+    typingDiv.textContent = 'Generiere Antwort...';
+    typingDiv.id = 'llm-chat-typing';
+    messagesArea.appendChild(typingDiv);
+    messagesArea.scrollTop = messagesArea.scrollHeight;
+
+    // Send to background
+    chrome.runtime.sendMessage({
+      action: "processFreePrompt",
+      messages: chatMessages
+    }, (response) => {
+      // Remove typing indicator
+      const typing = document.getElementById('llm-chat-typing');
+      if (typing) typing.remove();
+
+      inputField.disabled = false;
+      inputField.focus();
+
+      if (chrome.runtime.lastError) {
+        addChatMessage('assistant', 'Fehler: ' + chrome.runtime.lastError.message, messagesArea);
+        return;
+      }
+
+      if (response && response.success && response.text) {
+        const assistantMessage = response.text;
+        chatMessages.push({ role: 'assistant', content: assistantMessage });
+        addChatMessage('assistant', assistantMessage, messagesArea);
+      } else {
+        const errMsg = (response && response.error) ? response.error : 'Unbekannter Fehler';
+        addChatMessage('assistant', '❌ Fehler: ' + errMsg, messagesArea);
+      }
+    });
+  }
+
+  function applyLastResult() {
+    // Find the last assistant message in the conversation
+    const lastAssistantMsg = [...chatMessages].reverse().find(m => m.role === 'assistant');
+    
+    if (!lastAssistantMsg) {
+      showErrorNotification('Kein generierter Text zum Übernehmen vorhanden.');
+      return;
+    }
+
+    const resultText = lastAssistantMsg.content;
+
+    // Use pendingElement or activeInputElement
+    const targetElement = pendingElement || activeInputElement;
+    
+    if (!targetElement) {
+      showErrorNotification('Kein Eingabefeld gefunden.');
+      return;
+    }
+
+    replaceFullTextInElement(targetElement, resultText);
+
+    // Re-show floating icon
+    activeInputElement = targetElement;
+    lastProcessedElement = null;
+    pendingElement = null;
+    
+    // Close chat window
+    closeChatWindow();
+
+    // Show icon again
+    showFloatingIcon();
+  }
+
+  function closeChatWindow() {
+    if (chatWindow) {
+      chatWindow.remove();
+      chatWindow = null;
+      chatMessages = [];
+    }
+  }
+
+  // =====================================================================
+  //  TEXT REPLACEMENT (shared between action & free prompt)
+  // =====================================================================
+
   function showProcessingIndicator() {
     // Change icon to show loading state
     if (floatingIcon) {
@@ -391,19 +872,7 @@
     }
   }
 
-  function replaceFullText(newText) {
-    hideProcessingIndicator();
-    
-    // Use lastProcessedElement if activeInputElement was cleared
-    const targetElement = activeInputElement || lastProcessedElement;
-    
-    if (!targetElement) {
-      console.warn("[LLM Content] No active element for full text replacement");
-      return;
-    }
-
-    let el = targetElement;
-
+  function replaceFullTextInElement(el, newText) {
     if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
       // Check if element is still in DOM
       if (!document.contains(el)) {
@@ -441,11 +910,6 @@
         tracker.setValue(newText);
       }
       
-      // Re-show icon after replacement
-      activeInputElement = el;
-      lastProcessedElement = null;
-      showFloatingIcon();
-      
     } else if (el.isContentEditable) {
       if (!document.contains(el)) {
         console.warn("[LLM Content] ContentEditable element no longer in DOM");
@@ -455,11 +919,27 @@
       el.innerText = newText;
       
       el.dispatchEvent(new Event('input', { bubbles: true }));
-      
-      activeInputElement = el;
-      lastProcessedElement = null;
-      showFloatingIcon();
     }
+  }
+
+  function replaceFullText(newText) {
+    hideProcessingIndicator();
+    
+    // Use lastProcessedElement if activeInputElement was cleared
+    const targetElement = activeInputElement || lastProcessedElement;
+    
+    if (!targetElement) {
+      console.warn("[LLM Content] No active element for full text replacement");
+      return;
+    }
+
+    let el = targetElement;
+    replaceFullTextInElement(el, newText);
+
+    // Re-show icon after replacement
+    activeInputElement = el;
+    lastProcessedElement = null;
+    showFloatingIcon();
   }
 
   function replaceSelectedText(newText) {

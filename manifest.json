@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "LLM Text Assistent",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Verarbeite markierten Text in Eingabemasken über ein Chat-Completions-LLM direkt im Browser.",
   "permissions": [
     "contextMenus",
