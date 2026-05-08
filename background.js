@@ -4,10 +4,10 @@ const DEFAULT_CONFIG = {
   apiKey: "",
   model: "gpt-3.5-turbo",
   temperature: "0.3",
-  promptTranslate: "Übersetze den folgenden Text ins Englische. Behalte die Formatierung, Absätze und Zeilenumbrüche genau bei. Antworte nur mit der Übersetzung, ohne zusätzliche Erklärungen:",
-  promptExpand: "Formuliere die folgenden Stichpunkte oder Satzfragmente zu einem vollständigen, flüssigen Text aus. Behalte die Formatierung, Absätze und Zeilenumbrüche bei. Antworte nur mit dem ausformulierten Text:",
-  promptSummarize: "Fasse den folgenden Text kurz und prägnant zusammen. Behalte die Formatierung, Absätze und Zeilenumbrüche bei. Antworte nur mit der Zusammenfassung:",
-  promptGrammar: "Korrigiere Rechtschreibung, Grammatik und Zeichensetzung im folgenden Text. Behalte die Formatierung, Absätze und Zeilenumbrüche bei. Antworte nur mit dem korrigierten Text:",
+  promptTranslate: "Du bist ein Übersetzungs-Werkzeug. Übersetze den unterhalb markierten Text ins Englische. Behalte die Formatierung, Absätze und Zeilenumbrüche genau bei. Gib NUR die Übersetzung aus – keine Einleitung, keine Erklärung, keine Meta-Kommentare.",
+  promptExpand: "Du bist ein Text-Werkzeug. Formuliere die unterhalb markierten Stichpunkte oder Satzfragmente zu einem vollständigen, flüssigen Text aus. Behalte die Formatierung, Absätze und Zeilenumbrüche bei. Gib NUR den ausformulierten Text aus – keine Einleitung, keine Erklärung, keine Meta-Kommentare.",
+  promptSummarize: "Du bist ein Zusammenfassungs-Werkzeug. Fasse den unterhalb markierten Text kurz und prägnant zusammen. Behalte die Formatierung, Absätze und Zeilenumbrüche bei. Gib NUR die Zusammenfassung aus – keine Einleitung, keine Erklärung, keine Meta-Kommentare.",
+  promptGrammar: "Du bist ein Korrektur-Werkzeug. Korrigiere Rechtschreibung, Grammatik und Zeichensetzung im unterhalb markierten Text. Behalte die Formatierung, Absätze und Zeilenumbrüche bei. Gib NUR den korrigierten Text aus – keine Einleitung, keine Erklärung, keine Meta-Kommentare.",
   customActions: [],
   freePromptEnabled: true
 };
@@ -209,9 +209,19 @@ async function processText(action, text, tab, isFullText = false) {
       systemPrompt = builtinPromptMap[action];
     }
 
+    // Embed the text inside a system-level instruction so the LLM treats it
+    // as input material rather than a conversational user message.
+    const fullSystemPrompt = `${systemPrompt}
+
+--- ZU VERARBEITENDER TEXT (keine Chat-Nachricht!) ---
+${text}
+--- ENDE TEXT ---
+
+Verarbeite den obigen Text strikt gemäß der obigen Anweisung. Gib NUR das Ergebnis aus, ohne Einleitung, Erklärung oder sonstige Zusätze.`;
+
     const messages = [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: text }
+      { role: "system", content: fullSystemPrompt },
+      { role: "user", content: "Verarbeite den Text." }
     ];
 
     const requestBody = {
