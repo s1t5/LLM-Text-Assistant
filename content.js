@@ -509,6 +509,23 @@
   let chatMessages = []; // Conversation history for the current chat session
   let pendingElement = null;
 
+  const SYSTEM_PROMPT = "Du bist ein hilfreicher Text-Assistent. Bearbeite und formuliere Text anhand der Anweisungen des Nutzers. Antworte nur mit dem verarbeiteten Text, ohne zusätzliche Erklärungen, es sei denn, der Nutzer bittet darum.";
+
+  function buildInitialChatMessages(contextText) {
+    let systemContent = SYSTEM_PROMPT;
+
+    if (contextText && contextText.trim()) {
+      systemContent += "\n\nDer Nutzer hat folgenden Text aus seinem Eingabefeld als Kontext geladen. Beziehe dich bei allen Anweisungen auf diesen Text:\n\n---\n" + contextText + "\n---";
+    }
+
+    return [
+      {
+        role: "system",
+        content: systemContent
+      }
+    ];
+  }
+
   function openFreePromptChat() {
     if (!activeInputElement) return;
     pendingElement = activeInputElement;
@@ -520,13 +537,12 @@
     const existing = document.getElementById('llm-chat-overlay');
     if (existing) existing.remove();
 
+    // Load the current text from the input element as context
+    const contextText = getElementFullText(pendingElement);
+
     // Reset conversation — start fresh with a system prompt for text modification
-    chatMessages = [
-      {
-        role: "system",
-        content: "Du bist ein hilfreicher Text-Assistent. Bearbeite und formuliere Text anhand der Anweisungen des Nutzers. Antworte nur mit dem verarbeiteten Text, ohne zusätzliche Erklärungen, es sei denn, der Nutzer bittet darum."
-      }
-    ];
+    // plus the input field text as context
+    chatMessages = buildInitialChatMessages(contextText);
 
     // Create overlay
     chatWindow = document.createElement('div');
@@ -596,7 +612,11 @@
     });
 
     // Welcome message
-    addChatMessage('assistant', 'Beschreibe, was mit deinem Text passieren soll. Du kannst mehrere Anweisungen nacheinander senden. Klicke auf **Übernehmen**, um das Ergebnis ins Textfeld einzusetzen.', messagesArea);
+    if (contextText && contextText.trim()) {
+      addChatMessage('assistant', 'Text aus dem Eingabefeld wurde als Kontext geladen. Du kannst jetzt Anweisungen geben, z.B. "Verbessere den Text" oder "Übersetze ins Englische".', messagesArea);
+    } else {
+      addChatMessage('assistant', 'Beschreibe, was mit deinem Text passieren soll. Du kannst mehrere Anweisungen nacheinander senden. Klicke auf **Übernehmen**, um das Ergebnis ins Textfeld einzusetzen.', messagesArea);
+    }
 
     // --- Input area ---
     const inputArea = document.createElement('div');
@@ -714,14 +734,15 @@
   }
 
   function resetChatSession(messagesArea) {
-    chatMessages = [
-      {
-        role: "system",
-        content: "Du bist ein hilfreicher Text-Assistent. Bearbeite und formuliere Text anhand der Anweisungen des Nutzers. Antworte nur mit dem verarbeiteten Text, ohne zusätzliche Erklärungen, es sei denn, der Nutzer bittet darum."
-      }
-    ];
+    const contextText = pendingElement ? getElementFullText(pendingElement) : '';
+    chatMessages = buildInitialChatMessages(contextText);
     messagesArea.innerHTML = '';
-    addChatMessage('assistant', 'Chat zurückgesetzt. Was möchtest du mit deinem Text machen?', messagesArea);
+
+    if (contextText && contextText.trim()) {
+      addChatMessage('assistant', 'Chat zurückgesetzt. Text aus dem Eingabefeld wurde neu als Kontext geladen. Was möchtest du damit machen?', messagesArea);
+    } else {
+      addChatMessage('assistant', 'Chat zurückgesetzt. Was möchtest du mit deinem Text machen?', messagesArea);
+    }
   }
 
   function addChatMessage(role, content, messagesArea) {
