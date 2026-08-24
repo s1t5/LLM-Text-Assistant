@@ -7,6 +7,15 @@
   let actionMenu = null;
   let hideTimeout = null;
 
+  // Drag state for floating icon
+  let isDraggingIcon = false;
+  let dragOffsetX = 0;
+  let dragOffsetY = 0;
+  let dragStartX = 0;
+  let dragStartY = 0;
+  let hasDragged = false;
+  let savedIconPosition = null; // {top, left} if user has moved the icon
+
   // Dynamic actions (loaded from storage)
   let builtinActions = [
     { id: "translate", title: "🌐 Übersetzen", label: "Ins Englische übersetzen" },
@@ -86,21 +95,33 @@
   function attachListeners(root) {
     const elements = root.querySelectorAll('input, textarea, [contenteditable="true"]');
     for (const el of elements) {
-      if (!el.dataset.llmListenerAttached) {
+      if (isTextInput(el) && !el.dataset.llmListenerAttached) {
         el.dataset.llmListenerAttached = "true";
         el.addEventListener('focus', onElementFocus);
       }
     }
     // Also check if root itself is editable
     if (root.matches && root.matches('input, textarea, [contenteditable="true"]')) {
-      if (!root.dataset.llmListenerAttached) {
+      if (isTextInput(root) && !root.dataset.llmListenerAttached) {
         root.dataset.llmListenerAttached = "true";
         root.addEventListener('focus', onElementFocus);
       }
     }
   }
 
+  function isTextInput(el) {
+    if (el.tagName === 'TEXTAREA') return true;
+    if (el.isContentEditable) return true;
+    if (el.tagName === 'INPUT') {
+      // Only text-like input types, exclude buttons, checkboxes, etc.
+      const textTypes = ['text', 'email', 'password', 'search', 'tel', 'url'];
+      return textTypes.includes((el.type || 'text').toLowerCase());
+    }
+    return false;
+  }
+
   function onElementFocus(e) {
+    if (!isTextInput(e.target)) return;
     activeInputElement = e.target;
     showFloatingIcon();
   }
@@ -146,26 +167,34 @@
       createFloatingIcon();
     }
 
-    // Position icon at top-right corner of the element
-    const scrollX = window.scrollX || window.pageXOffset;
-    const scrollY = window.scrollY || window.pageYOffset;
-    
-    const top = rect.top + scrollY + 4;
-    const left = rect.right + scrollX - 28;
+    // Apply saved position if user has dragged the icon, otherwise default to top-right of element
+    if (savedIconPosition) {
+      Object.assign(floatingIcon.style, {
+        top: `${savedIconPosition.top}px`,
+        left: `${savedIconPosition.left}px`
+      });
+    } else {
+      const scrollX = window.scrollX || window.pageXOffset;
+      const scrollY = window.scrollY || window.pageYOffset;
+      
+      const top = rect.top + scrollY + 4;
+      const left = rect.right + scrollX - 28;
 
-    Object.assign(floatingIcon.style, {
-      top: `${top}px`,
-      left: `${left}px`,
-      display: 'flex'
-    });
+      Object.assign(floatingIcon.style, {
+        top: `${top}px`,
+        left: `${left}px`
+      });
+    }
 
-    // Add scroll/resize listener to update position
+    floatingIcon.style.display = 'flex';
+
+    // Add scroll/resize listener to update position (only if not manually positioned)
     window.addEventListener('scroll', updateIconPosition, { passive: true });
     window.addEventListener('resize', updateIconPosition, { passive: true });
   }
 
   function updateIconPosition() {
-    if (activeInputElement && floatingIcon) {
+    if (activeInputElement && floatingIcon && !isDraggingIcon && !savedIconPosition) {
       const rect = activeInputElement.getBoundingClientRect();
       const scrollX = window.scrollX || window.pageXOffset;
       const scrollY = window.scrollY || window.pageYOffset;
@@ -199,7 +228,7 @@
       height: '24px',
       backgroundColor: '#4a90d9',
       borderRadius: '50%',
-      cursor: 'pointer',
+      cursor: 'grab',
       zIndex: '2147483646',
       display: 'none',
       alignItems: 'center',
@@ -209,7 +238,8 @@
       fontSize: '14px',
       lineHeight: '1',
       userSelect: 'none',
-      color: 'white'
+      color: 'white',
+      touchAction: 'none'
     });
 
     // SVG robot icon
@@ -229,13 +259,80 @@
     
     floatingIcon.setAttribute('tabindex', '-1');
     
-    floatingIcon.addEventListener('mousedown', (e) => {
+      floatingIcon.addEventListener('mousedown', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      toggleActionMenu();
+      
+      floatingIcon.style.cursor = 'grabbing';
+      
+      dragStartX = e.clientX;
+      dragStartY = e.clientY;
+      isDraggingIcon = false;
+      hasDragged = false;
+      
+      const rect = floatingIcon.getBoundingClientRect();
+      const scrollX = window.scrollX || window.pageXOffset;
+      const scrollY = window.scrollY || window.pageYOffset;
+      dragOffsetX = rect.left + scrollX - e.clientX;
+      dragOffsetY = rect.top + scrollY - e.clientY;
+      
+      document.addEventListener('mousemove', onIconDrag);
+      document.addEventListener('mouseup', onIconDragEnd);
+    });
+
+    // Double-click to reset icon position to default
+    floatingIcon.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      savedIconPosition = null;
+      updateIconPosition();
     });
 
     document.body.appendChild(floatingIcon);
+  }
+
+  function onIconDrag(e) {
+    if (!hasDragged && Math.abs(e.clientX - dragStartX) + Math.abs(e.clientY - dragStartY) > 5) {
+      hasDragged = true;
+      isDraggingIcon = true;
+      floatingIcon.style.transition = 'none';
+    }
+
+    if (isDraggingIcon) {
+      const newLeft = e.clientX + dragOffsetX;
+      const newTop = e.clientY + dragOffsetY;
+      
+      // Keep within viewport bounds
+      floatingIcon.style.left = `${Math.max(4, Math.min(window.innerWidth - 28, newLeft))}px`;
+      floatingIcon.style.top = `${Math.max(4, Math.min(window.innerHeight - 28, newTop))}px`;
+    }
+  }
+
+  function onIconDragEnd(e) {
+    floatingIcon.style.cursor = 'grab';
+    
+    if (isDraggingIcon) {
+      // Snap back to nearest edge for comfortable icon placement
+      const rect = floatingIcon.getBoundingClientRect();
+      const scrollX = window.scrollX || window.pageXOffset;
+      const scrollY = window.scrollY || window.pageYOffset;
+      
+      floatingIcon.style.transition = 'transform 0.15s ease, opacity 0.15s ease';
+      
+      // Save the manual position
+      savedIconPosition = {
+        top: rect.top + scrollY,
+        left: rect.left + scrollX
+      };
+
+      isDraggingIcon = false;
+    } else {
+      // Simple click, not a drag
+      toggleActionMenu();
+    }
+    
+    document.removeEventListener('mousemove', onIconDrag);
+    document.removeEventListener('mouseup', onIconDragEnd);
   }
 
   function toggleActionMenu() {
