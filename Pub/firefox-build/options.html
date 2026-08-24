@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <title data-i18n="optionsTitle">LLM Text Assistent – Einstellungen</title>
+  <style>
+    :root {
+      --bg: #f5f7fa;
+      --card: #ffffff;
+      --text: #2c3e50;
+      --label: #5a6a7a;
+      --accent: #3498db;
+      --accent-hover: #2980b9;
+      --border: #d0d7de;
+      --success: #2ecc71;
+      --error: #e74c3c;
+      --danger: #e74c3c;
+      --danger-hover: #c0392b;
+      --font: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      padding: 40px 20px;
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+    }
+
+    .container {
+      max-width: 720px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 1.6rem;
+      font-weight: 600;
+    }
+
+    p.subtitle {
+      margin: 0 0 28px;
+      color: var(--label);
+      font-size: 0.95rem;
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.04);
+    }
+
+    .card h2 {
+      margin: 0 0 16px;
+      font-size: 1.1rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .field {
+      margin-bottom: 18px;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 0.88rem;
+      font-weight: 500;
+      color: var(--label);
+    }
+
+    input[type="text"],
+    input[type="number"],
+    input[type="password"],
+    textarea {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-family: var(--font);
+      font-size: 0.95rem;
+      color: var(--text);
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    input:focus,
+    textarea:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(52,152,219,0.15);
+    }
+
+    textarea {
+      resize: vertical;
+      min-height: 80px;
+      line-height: 1.5;
+    }
+
+    .hint {
+      font-size: 0.82rem;
+      color: var(--label);
+      margin-top: 4px;
+    }
+
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-top: 8px;
+    }
+
+    button {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 22px;
+      font-family: var(--font);
+      font-size: 0.95rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.2s, transform 0.1s;
+    }
+
+    button:hover {
+      background: var(--accent-hover);
+    }
+
+    button:active {
+      transform: translateY(1px);
+    }
+
+    button.secondary {
+      background: #e2e8f0;
+      color: var(--text);
+    }
+
+    button.secondary:hover {
+      background: #cbd5e1;
+    }
+
+    button.danger {
+      background: var(--danger);
+    }
+
+    button.danger:hover {
+      background: var(--danger-hover);
+    }
+
+    button.small {
+      padding: 6px 14px;
+      font-size: 0.82rem;
+    }
+
+    #status {
+      font-size: 0.9rem;
+      font-weight: 500;
+      min-height: 1.4em;
+    }
+
+    #status.success { color: var(--success); }
+    #status.error   { color: var(--error); }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    /* Custom action card styles */
+    .custom-action-entry {
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px;
+      margin-bottom: 14px;
+      position: relative;
+    }
+
+    .custom-action-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+
+    .custom-action-header h3 {
+      margin: 0;
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .custom-action-row {
+      display: grid;
+      grid-template-columns: 60px 1fr;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+
+    .custom-action-row label {
+      margin-bottom: 2px;
+      font-size: 0.8rem;
+    }
+
+    .custom-action-row input,
+    .custom-action-row textarea {
+      font-size: 0.9rem;
+    }
+
+    .custom-action-row textarea {
+      min-height: 60px;
+    }
+
+    #customActionsList {
+      margin-bottom: 12px;
+    }
+
+    .add-action-btn {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: #e8f4fd;
+      color: var(--accent);
+      border: 2px dashed var(--accent);
+      border-radius: 8px;
+      padding: 10px 18px;
+      font-weight: 500;
+      cursor: pointer;
+      width: 100%;
+      justify-content: center;
+      transition: background 0.2s;
+    }
+
+    .add-action-btn:hover {
+      background: #d4edfc;
+    }
+
+    /* Toggle switch */
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 0;
+    }
+
+    .toggle-label {
+      font-size: 0.95rem;
+      font-weight: 500;
+      color: var(--text);
+    }
+
+    .toggle-switch {
+      position: relative;
+      display: inline-block;
+      width: 48px;
+      height: 26px;
+    }
+
+    .toggle-switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+
+    .toggle-slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-color: #ccc;
+      transition: 0.3s;
+      border-radius: 26px;
+    }
+
+    .toggle-slider:before {
+      position: absolute;
+      content: "";
+      height: 20px;
+      width: 20px;
+      left: 3px;
+      bottom: 3px;
+      background-color: white;
+      transition: 0.3s;
+      border-radius: 50%;
+    }
+
+    .toggle-switch input:checked + .toggle-slider {
+      background-color: var(--accent);
+    }
+
+    .toggle-switch input:checked + .toggle-slider:before {
+      transform: translateX(22px);
+    }
+
+    @media (max-width: 560px) {
+      .grid-2 { grid-template-columns: 1fr; }
+      .custom-action-row { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1 data-i18n="optionsHeading">LLM Text Assistent</h1>
+    <p class="subtitle" data-i18n="optionsSubtitle">Konfiguriere deine API, System-Prompts und benutzerdefinierte Aktionen.</p>
+
+    <!-- API Configuration Card -->
+    <div class="card">
+      <h2 data-i18n="optionsApiConfig">🔌 API-Konfiguration</h2>
+      <div class="field">
+        <label for="apiUrl" data-i18n="optionsApiUrl">API URL</label>
+        <input type="text" id="apiUrl" placeholder="https://api.openai.com/v1/chat/completions">
+        <div class="hint" data-i18n="optionsApiUrlHint">z. B. OpenAI, Ollama (http://localhost:11434/v1/chat/completions) oder LM Studio</div>
+      </div>
+
+      <div class="grid-2">
+        <div class="field">
+          <label for="apiKey" data-i18n="optionsApiKey">API Key</label>
+          <input type="password" id="apiKey" placeholder="sk-...">
+          <div class="hint" data-i18n="optionsApiKeyHint">Bei lokalen Endpunkten leer lassen</div>
+        </div>
+        <div class="field">
+          <label for="model" data-i18n="optionsModel">Modell</label>
+          <input type="text" id="model" placeholder="gpt-3.5-turbo">
+          <div class="hint" data-i18n="optionsModelHint">z. B. gpt-4, llama2, mistral</div>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="field">
+          <label for="temperature" data-i18n="optionsTemperature">Temperature</label>
+          <input type="number" id="temperature" min="0" max="2" step="0.1" placeholder="0.3">
+          <div class="hint" data-i18n="optionsTemperatureHint">0 = deterministisch, 2 = sehr kreativ (Standard: 0.3)</div>
+        </div>
+        <div class="field">
+          <label for="timeoutSeconds" data-i18n="optionsTimeout">Timeout (Sekunden)</label>
+          <input type="number" id="timeoutSeconds" min="5" max="600" step="5" placeholder="60">
+          <div class="hint" data-i18n="optionsTimeoutHint">Maximale Wartezeit pro Anfrage (Standard: 60)</div>
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="targetLanguage" data-i18n="optionsTargetLanguage">Zielsprache (Übersetzen)</label>
+        <input type="text" id="targetLanguage" placeholder="Englisch">
+        <div class="hint" data-i18n="optionsTargetLanguageHint">Sprache, in die übersetzt wird, z. B. Englisch, Deutsch, Französisch</div>
+      </div>
+    </div>
+
+    <!-- System Prompts Card -->
+    <div class="card">
+      <h2 data-i18n="optionsSystemPrompts">📝 System-Prompts</h2>
+      <div class="field">
+        <label for="promptTranslate" data-i18n="optionsPromptTranslate">🌐 Übersetzen</label>
+        <textarea id="promptTranslate"></textarea>
+      </div>
+      <div class="field">
+        <label for="promptExpand" data-i18n="optionsPromptExpand">✍️ Ausformulieren</label>
+        <textarea id="promptExpand"></textarea>
+      </div>
+      <div class="field">
+        <label for="promptSummarize" data-i18n="optionsPromptSummarize">📋 Zusammenfassen</label>
+        <textarea id="promptSummarize"></textarea>
+      </div>
+      <div class="field">
+        <label for="promptGrammar" data-i18n="optionsPromptGrammar">✅ Rechtschreibung & Grammatik</label>
+        <textarea id="promptGrammar"></textarea>
+      </div>
+    </div>
+
+    <!-- Custom Actions Card -->
+    <div class="card">
+      <h2 data-i18n="optionsCustomActions">⚡ Benutzerdefinierte Aktionen</h2>
+      <p style="margin:0 0 16px;font-size:0.88rem;color:var(--label);" data-i18n="optionsCustomActionsDesc">
+        Definiere eigene Aktionen mit individuellen Prompts. Diese erscheinen im Kontextmenü und im schwebenden Menü an Eingabefeldern.
+      </p>
+      <div id="customActionsList">
+        <!-- Dynamically filled -->
+      </div>
+      <button id="addActionBtn" class="add-action-btn" data-i18n="optionsAddAction">＋ Neue Aktion hinzufügen</button>
+    </div>
+
+    <!-- Free Prompt Card -->
+    <div class="card">
+      <h2 data-i18n="optionsFreePrompt">💬 Freier Prompt (Chat-Modus)</h2>
+      <div class="toggle-row">
+        <span class="toggle-label" data-i18n="optionsFreePromptToggle">Freien Prompt im Eingabefeld-Menü anzeigen</span>
+        <label class="toggle-switch">
+          <input type="checkbox" id="freePromptEnabled">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <p style="margin:8px 0 0;font-size:0.82rem;color:var(--label);" data-i18n="optionsFreePromptDesc">
+        Aktiviert den Eintrag "💬 Freier Prompt" im Menü. Es öffnet sich ein Chat-Fenster, in dem du per Nachrichteneingabe einen Text prompten kannst. Mit "Übernehmen" wird das Ergebnis in das Textfeld eingesetzt.
+      </p>
+    </div>
+
+    <!-- Main Actions -->
+    <div class="actions">
+      <button id="saveBtn" data-i18n="optionsSave">💾 Speichern</button>
+      <button id="resetBtn" class="secondary" data-i18n="optionsReset">↩️ Auf Standard zurücksetzen</button>
+      <span id="status"></span>
+    </div>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>
