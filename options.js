@@ -1,26 +1,54 @@
 (function() {
   'use strict';
 
+  // --- i18n helper ---
+
+  function t(key, substitutions) {
+    try {
+      const msg = chrome.i18n.getMessage(key, substitutions);
+      return msg || key;
+    } catch (e) {
+      return key;
+    }
+  }
+
+  function applyI18n() {
+    document.querySelectorAll('[data-i18n]').forEach(el => {
+      const key = el.getAttribute('data-i18n');
+      const msg = t(key);
+      if (msg && msg !== key) {
+        el.textContent = msg;
+      }
+    });
+    document.title = t('optionsTitle');
+  }
+
   // --- Constants ---
 
-  const DEFAULTS = {
-    apiUrl: "https://api.openai.com/v1/chat/completions",
-    apiKey: "",
-    model: "gpt-3.5-turbo",
-    temperature: "0.3",
-    promptTranslate: "Du bist ein Übersetzungs-Werkzeug. Übersetze den unterhalb markierten Text ins Englische. Behalte die Formatierung, Absätze und Zeilenumbrüche genau bei. Gib NUR die Übersetzung aus – keine Einleitung, keine Erklärung, keine Meta-Kommentare.",
-    promptExpand: "Du bist ein Text-Werkzeug. Formuliere die unterhalb markierten Stichpunkte oder Satzfragmente zu einem vollständigen, flüssigen Text aus. Behalte die Formatierung, Absätze und Zeilenumbrüche bei. Gib NUR den ausformulierten Text aus – keine Einleitung, keine Erklärung, keine Meta-Kommentare.",
-    promptSummarize: "Du bist ein Zusammenfassungs-Werkzeug. Fasse den unterhalb markierten Text kurz und prägnant zusammen. Behalte die Formatierung, Absätze und Zeilenumbrüche bei. Gib NUR die Zusammenfassung aus – keine Einleitung, keine Erklärung, keine Meta-Kommentare.",
-    promptGrammar: "Du bist ein Korrektur-Werkzeug. Korrigiere Rechtschreibung, Grammatik und Zeichensetzung im unterhalb markierten Text. Behalte die Formatierung, Absätze und Zeilenumbrüche bei. Gib NUR den korrigierten Text aus – keine Einleitung, keine Erklärung, keine Meta-Kommentare.",
-    customActions: [],
-    freePromptEnabled: true
-  };
+  function getDefaults() {
+    return {
+      apiUrl: "https://api.openai.com/v1/chat/completions",
+      apiKey: "",
+      model: "gpt-3.5-turbo",
+      temperature: "0.3",
+      timeoutSeconds: "60",
+      targetLanguage: t("defaultTargetLanguage") || "English",
+      promptTranslate: t("defaultPromptTranslate", t("defaultTargetLanguage") || "English"),
+      promptExpand: t("defaultPromptExpand"),
+      promptSummarize: t("defaultPromptSummarize"),
+      promptGrammar: t("defaultPromptGrammar"),
+      customActions: [],
+      freePromptEnabled: true
+    };
+  }
 
   const BUILTIN_FIELDS = [
     "apiUrl",
     "apiKey",
     "model",
     "temperature",
+    "timeoutSeconds",
+    "targetLanguage",
     "promptTranslate",
     "promptExpand",
     "promptSummarize",
@@ -69,7 +97,7 @@
     customActions.forEach((action, index) => {
       const entry = el('div', { className: 'custom-action-entry' }, [
         el('div', { className: 'custom-action-header' }, [
-          el('h3', {}, [`Aktion #${index + 1}`]),
+          el('h3', {}, [t('optionsActionNumber', String(index + 1))]),
           el('button', {
             className: 'danger small',
             onClick: (e) => {
@@ -77,10 +105,10 @@
               customActions.splice(index, 1);
               renderCustomActions();
             }
-          }, ['🗑 Entfernen'])
+          }, [t('optionsRemove')])
         ]),
         el('div', { className: 'custom-action-row' }, [
-          el('label', {}, ['Emoji']),
+          el('label', {}, [t('optionsEmoji')]),
           el('input', {
             type: 'text',
             className: 'ca-emoji',
@@ -91,27 +119,27 @@
           })
         ]),
         el('div', { className: 'custom-action-row' }, [
-          el('label', {}, ['Titel']),
+          el('label', {}, [t('optionsActionTitle')]),
           el('input', {
             type: 'text',
             className: 'ca-title',
             value: action.title || '',
-            placeholder: 'Aktionstitel',
+            placeholder: t('optionsActionTitlePlaceholder'),
             maxlength: '40',
             onInput: () => syncCustomActionsFromDOM()
           })
         ]),
         el('div', { className: 'custom-action-row' }, [
-          el('label', {}, ['Prompt']),
+          el('label', {}, [t('optionsPromptLabel')]),
           el('textarea', {
             className: 'ca-prompt',
-            placeholder: 'System-Prompt für diese Aktion...',
+            placeholder: t('optionsPromptPlaceholder'),
             rows: '3',
             onInput: () => syncCustomActionsFromDOM()
           }, [action.prompt || ''])
         ]),
         el('div', { className: 'toggle-row' }, [
-          el('span', { className: 'toggle-label' }, ['Im Kontextmenü anzeigen']),
+          el('span', { className: 'toggle-label' }, [t('optionsShowInContextMenu')]),
           el('label', { className: 'toggle-switch' }, [
             el('input', {
               type: 'checkbox',
@@ -160,6 +188,7 @@
   // --- Lifecycle ---
 
   document.addEventListener("DOMContentLoaded", () => {
+    applyI18n();
     restoreOptions();
 
     $("saveBtn").addEventListener("click", saveOptions);
@@ -173,13 +202,14 @@
   // --- Restore ---
 
   function restoreOptions() {
+    const DEFAULTS = getDefaults();
     chrome.storage.sync.get(BUILTIN_FIELDS, (result) => {
       // Built-in fields
       for (const key of BUILTIN_FIELDS) {
         if (key === 'customActions') continue; // handled separately
         if (key === 'freePromptEnabled') {
-          const el = $('freePromptEnabled');
-          if (el) el.checked = result[key] !== undefined ? result[key] : DEFAULTS[key];
+          const cb = $('freePromptEnabled');
+          if (cb) cb.checked = result[key] !== undefined ? result[key] : DEFAULTS[key];
           continue;
         }
         const el = $(key);
@@ -200,6 +230,7 @@
 
   function saveOptions() {
     syncCustomActionsFromDOM();
+    const DEFAULTS = getDefaults();
 
     const values = {};
     for (const key of BUILTIN_FIELDS) {
@@ -218,28 +249,28 @@
 
     chrome.storage.sync.set(values, () => {
       if (chrome.runtime.lastError) {
-        showStatus("Fehler beim Speichern: " + chrome.runtime.lastError.message, "error");
+        showStatus(t('optionsSaveError') + chrome.runtime.lastError.message, "error");
         return;
       }
-      showStatus("✅ Einstellungen gespeichert!", "success");
+      showStatus(t('optionsSaved'), "success");
     });
   }
 
   // --- Reset ---
 
   function resetOptions() {
-    if (!confirm("Möchtest du wirklich alle Einstellungen auf die Standardwerte zurücksetzen?")) {
+    if (!confirm(t('optionsResetConfirm'))) {
       return;
     }
 
     chrome.storage.sync.clear(() => {
       if (chrome.runtime.lastError) {
-        showStatus("Fehler beim Zurücksetzen: " + chrome.runtime.lastError.message, "error");
+        showStatus(t('optionsResetError') + chrome.runtime.lastError.message, "error");
         return;
       }
       customActions = [];
       restoreOptions();
-      showStatus("✅ Standardwerte wiederhergestellt.", "success");
+      showStatus(t('optionsResetDone'), "success");
     });
   }
 

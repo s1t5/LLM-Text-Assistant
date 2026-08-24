@@ -2,7 +2,7 @@
 <html lang="de">
 <head>
   <meta charset="UTF-8">
-  <title>LLM Text Assistent – Einstellungen</title>
+  <title data-i18n="optionsTitle">LLM Text Assistent – Einstellungen</title>
   <style>
     :root {
       --bg: #f5f7fa;
@@ -311,90 +311,103 @@
 </head>
 <body>
   <div class="container">
-    <h1>LLM Text Assistent</h1>
-    <p class="subtitle">Konfiguriere deine API, System-Prompts und benutzerdefinierte Aktionen.</p>
+    <h1 data-i18n="optionsHeading">LLM Text Assistent</h1>
+    <p class="subtitle" data-i18n="optionsSubtitle">Konfiguriere deine API, System-Prompts und benutzerdefinierte Aktionen.</p>
 
     <!-- API Configuration Card -->
     <div class="card">
-      <h2>🔌 API-Konfiguration</h2>
+      <h2 data-i18n="optionsApiConfig">🔌 API-Konfiguration</h2>
       <div class="field">
-        <label for="apiUrl">API URL</label>
+        <label for="apiUrl" data-i18n="optionsApiUrl">API URL</label>
         <input type="text" id="apiUrl" placeholder="https://api.openai.com/v1/chat/completions">
-        <div class="hint">z. B. OpenAI, Ollama (<code>http://localhost:11434/v1/chat/completions</code>) oder LM Studio</div>
+        <div class="hint" data-i18n="optionsApiUrlHint">z. B. OpenAI, Ollama (http://localhost:11434/v1/chat/completions) oder LM Studio</div>
       </div>
 
       <div class="grid-2">
         <div class="field">
-          <label for="apiKey">API Key</label>
+          <label for="apiKey" data-i18n="optionsApiKey">API Key</label>
           <input type="password" id="apiKey" placeholder="sk-...">
-          <div class="hint">Bei lokalen Endpunkten leer lassen</div>
+          <div class="hint" data-i18n="optionsApiKeyHint">Bei lokalen Endpunkten leer lassen</div>
         </div>
         <div class="field">
-          <label for="model">Modell</label>
+          <label for="model" data-i18n="optionsModel">Modell</label>
           <input type="text" id="model" placeholder="gpt-3.5-turbo">
-          <div class="hint">z. B. gpt-4, llama2, mistral</div>
+          <div class="hint" data-i18n="optionsModelHint">z. B. gpt-4, llama2, mistral</div>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="field">
+          <label for="temperature" data-i18n="optionsTemperature">Temperature</label>
+          <input type="number" id="temperature" min="0" max="2" step="0.1" placeholder="0.3">
+          <div class="hint" data-i18n="optionsTemperatureHint">0 = deterministisch, 2 = sehr kreativ (Standard: 0.3)</div>
+        </div>
+        <div class="field">
+          <label for="timeoutSeconds" data-i18n="optionsTimeout">Timeout (Sekunden)</label>
+          <input type="number" id="timeoutSeconds" min="5" max="600" step="5" placeholder="60">
+          <div class="hint" data-i18n="optionsTimeoutHint">Maximale Wartezeit pro Anfrage (Standard: 60)</div>
         </div>
       </div>
 
       <div class="field">
-        <label for="temperature">Temperature</label>
-        <input type="number" id="temperature" min="0" max="2" step="0.1" placeholder="0.3">
-        <div class="hint">0 = deterministisch, 2 = sehr kreativ (Standard: 0.3)</div>
+        <label for="targetLanguage" data-i18n="optionsTargetLanguage">Zielsprache (Übersetzen)</label>
+        <input type="text" id="targetLanguage" placeholder="Englisch">
+        <div class="hint" data-i18n="optionsTargetLanguageHint">Sprache, in die übersetzt wird, z. B. Englisch, Deutsch, Französisch</div>
       </div>
     </div>
 
     <!-- System Prompts Card -->
     <div class="card">
-      <h2>📝 System-Prompts</h2>
+      <h2 data-i18n="optionsSystemPrompts">📝 System-Prompts</h2>
       <div class="field">
-        <label for="promptTranslate">🌐 Übersetzen</label>
+        <label for="promptTranslate" data-i18n="optionsPromptTranslate">🌐 Übersetzen</label>
         <textarea id="promptTranslate"></textarea>
       </div>
       <div class="field">
-        <label for="promptExpand">✍️ Ausformulieren</label>
+        <label for="promptExpand" data-i18n="optionsPromptExpand">✍️ Ausformulieren</label>
         <textarea id="promptExpand"></textarea>
       </div>
       <div class="field">
-        <label for="promptSummarize">📋 Zusammenfassen</label>
+        <label for="promptSummarize" data-i18n="optionsPromptSummarize">📋 Zusammenfassen</label>
         <textarea id="promptSummarize"></textarea>
       </div>
       <div class="field">
-        <label for="promptGrammar">✅ Rechtschreibung & Grammatik</label>
+        <label for="promptGrammar" data-i18n="optionsPromptGrammar">✅ Rechtschreibung & Grammatik</label>
         <textarea id="promptGrammar"></textarea>
       </div>
     </div>
 
     <!-- Custom Actions Card -->
     <div class="card">
-      <h2>⚡ Benutzerdefinierte Aktionen</h2>
-      <p style="margin:0 0 16px;font-size:0.88rem;color:var(--label);">
+      <h2 data-i18n="optionsCustomActions">⚡ Benutzerdefinierte Aktionen</h2>
+      <p style="margin:0 0 16px;font-size:0.88rem;color:var(--label);" data-i18n="optionsCustomActionsDesc">
         Definiere eigene Aktionen mit individuellen Prompts. Diese erscheinen im Kontextmenü und im schwebenden Menü an Eingabefeldern.
       </p>
       <div id="customActionsList">
         <!-- Dynamically filled -->
       </div>
-      <button id="addActionBtn" class="add-action-btn">＋ Neue Aktion hinzufügen</button>
+      <button id="addActionBtn" class="add-action-btn" data-i18n="optionsAddAction">＋ Neue Aktion hinzufügen</button>
     </div>
 
     <!-- Free Prompt Card -->
     <div class="card">
-      <h2>💬 Freier Prompt (Chat-Modus)</h2>
+      <h2 data-i18n="optionsFreePrompt">💬 Freier Prompt (Chat-Modus)</h2>
       <div class="toggle-row">
-        <span class="toggle-label">Freien Prompt im Eingabefeld-Menü anzeigen</span>
+        <span class="toggle-label" data-i18n="optionsFreePromptToggle">Freien Prompt im Eingabefeld-Menü anzeigen</span>
         <label class="toggle-switch">
           <input type="checkbox" id="freePromptEnabled">
           <span class="toggle-slider"></span>
         </label>
       </div>
-      <p style="margin:8px 0 0;font-size:0.82rem;color:var(--label);">
+      <p style="margin:8px 0 0;font-size:0.82rem;color:var(--label);" data-i18n="optionsFreePromptDesc">
         Aktiviert den Eintrag "💬 Freier Prompt" im Menü. Es öffnet sich ein Chat-Fenster, in dem du per Nachrichteneingabe einen Text prompten kannst. Mit "Übernehmen" wird das Ergebnis in das Textfeld eingesetzt.
       </p>
     </div>
 
     <!-- Main Actions -->
     <div class="actions">
-      <button id="saveBtn">💾 Speichern</button>
-      <button id="resetBtn" class="secondary">↩️ Auf Standard zurücksetzen</button>
+      <button id="saveBtn" data-i18n="optionsSave">💾 Speichern</button>
+      <button id="resetBtn" class="secondary" data-i18n="optionsReset">↩️ Auf Standard zurücksetzen</button>
       <span id="status"></span>
     </div>
   </div>

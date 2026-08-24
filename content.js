@@ -1,6 +1,16 @@
 (function() {
   'use strict';
 
+  // --- i18n helper ---
+  function t(key, substitutions) {
+    try {
+      const msg = chrome.i18n.getMessage(key, substitutions);
+      return msg || key;
+    } catch (e) {
+      return key;
+    }
+  }
+
   let activeInputElement = null;
   let lastProcessedElement = null;
   let floatingIcon = null;
@@ -16,13 +26,18 @@
   let hasDragged = false;
   let savedIconPosition = null; // {top, left} if user has moved the icon
 
+  // Active request state (for cancellation via icon click)
+  let currentRequestId = null;
+  let streamPort = null;
+  let nextLocalRequestId = Date.now() % 100000;
+
+  // Undo state
+  let lastUndoState = null; // {element, originalText, selStart, selEnd, isFullText}
+  let undoToast = null;
+  let undoToastTimer = null;
+
   // Dynamic actions (loaded from storage)
-  let builtinActions = [
-    { id: "translate", title: "🌐 Übersetzen", label: "Ins Englische übersetzen" },
-    { id: "expand", title: "✍️ Ausformulieren", label: "Ausformulieren" },
-    { id: "summarize", title: "📋 Zusammenfassen", label: "Zusammenfassen" },
-    { id: "grammar", title: "✅ Rechtschreibung & Grammatik", label: "Korrigieren" }
-  ];
+  let builtinActions = [];
   let customActions = [];
   let freePromptEnabled = true;
 
@@ -62,6 +77,12 @@
     } else if (request.action === "showError") {
       showErrorNotification(request.message);
       sendResponse({ success: true });
+    } else if (request.action === "contextMenuProcess") {
+      // Context menu selection replacement, handled with streaming via port.
+      handleContextMenuProcess(request.textAction, request.text)
+        .then(() => sendResponse({ success: true }))
+        .catch(() => sendResponse({ success: false }));
+      return true;
     }
     return true;
   });
@@ -70,7 +91,7 @@
   function init() {
     loadActions();
     attachListeners(document.body);
-    
+
     // Watch for dynamically added elements
     const observer = new MutationObserver((mutations) => {
       for (const mutation of mutations) {
@@ -81,12 +102,12 @@
         }
       }
     });
-    
+
     observer.observe(document.body, { childList: true, subtree: true });
 
     // Listen for storage changes to reload actions
     chrome.storage.onChanged.addListener((changes, namespace) => {
-      if (namespace === 'sync' && (changes.customActions || changes.freePromptEnabled)) {
+      if (namespace === 'sync' && (changes.customActions || changes.freePromptEnabled || changes.targetLanguage)) {
         loadActions();
       }
     });
@@ -129,28 +150,33 @@
   // Global click handler to detect clicks outside our UI
   document.addEventListener('click', (e) => {
     const target = e.target;
-    
+
     // Check if click is on our floating icon
     if (floatingIcon && (floatingIcon === target || floatingIcon.contains(target))) {
       return;
     }
-    
+
     // Check if click is on our action menu
     if (actionMenu && (actionMenu === target || actionMenu.contains(target))) {
       return;
     }
-    
+
     // Check if click is on the chat window
     const chatContainer = document.getElementById('llm-chat-overlay');
     if (chatContainer && (chatContainer === target || chatContainer.contains(target))) {
       return;
     }
-    
+
+    // Check if click is on the undo toast
+    if (undoToast && (undoToast === target || undoToast.contains(target))) {
+      return;
+    }
+
     // Check if click is on the active input element
     if (activeInputElement && (activeInputElement === target || activeInputElement.contains(target))) {
       return;
     }
-    
+
     // Click was outside our UI and outside active input - hide everything
     hideFloatingIcon();
     activeInputElement = null;
@@ -158,7 +184,7 @@
 
   function showFloatingIcon() {
     if (!activeInputElement) return;
-    
+
     // Don't show for hidden or very small elements
     const rect = activeInputElement.getBoundingClientRect();
     if (rect.width < 50 || rect.height < 20) return;
@@ -176,7 +202,7 @@
     } else {
       const scrollX = window.scrollX || window.pageXOffset;
       const scrollY = window.scrollY || window.pageYOffset;
-      
+
       const top = rect.top + scrollY + 4;
       const left = rect.right + scrollX - 28;
 
@@ -198,7 +224,7 @@
       const rect = activeInputElement.getBoundingClientRect();
       const scrollX = window.scrollX || window.pageXOffset;
       const scrollY = window.scrollY || window.pageYOffset;
-      
+
       const top = rect.top + scrollY + 4;
       const left = rect.right + scrollX - 28;
 
@@ -221,7 +247,7 @@
   function createFloatingIcon() {
     floatingIcon = document.createElement('div');
     floatingIcon.id = 'llm-assistant-icon';
-    
+
     Object.assign(floatingIcon.style, {
       position: 'absolute',
       width: '24px',
@@ -242,9 +268,9 @@
       touchAction: 'none'
     });
 
-    // SVG robot icon
+    // Robot emoji icon
     floatingIcon.innerHTML = '🤖';
-    
+
     floatingIcon.addEventListener('mouseenter', () => {
       floatingIcon.style.transform = 'scale(1.15)';
       if (hideTimeout) {
@@ -252,30 +278,36 @@
         hideTimeout = null;
       }
     });
-    
+
     floatingIcon.addEventListener('mouseleave', () => {
       floatingIcon.style.transform = 'scale(1)';
     });
-    
+
     floatingIcon.setAttribute('tabindex', '-1');
-    
+
       floatingIcon.addEventListener('mousedown', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      
+
+      // While processing, a click cancels the request instead of dragging/menu
+      if (currentRequestId !== null) {
+        cancelCurrentRequest();
+        return;
+      }
+
       floatingIcon.style.cursor = 'grabbing';
-      
+
       dragStartX = e.clientX;
       dragStartY = e.clientY;
       isDraggingIcon = false;
       hasDragged = false;
-      
+
       const rect = floatingIcon.getBoundingClientRect();
       const scrollX = window.scrollX || window.pageXOffset;
       const scrollY = window.scrollY || window.pageYOffset;
       dragOffsetX = rect.left + scrollX - e.clientX;
       dragOffsetY = rect.top + scrollY - e.clientY;
-      
+
       document.addEventListener('mousemove', onIconDrag);
       document.addEventListener('mouseup', onIconDragEnd);
     });
@@ -301,7 +333,7 @@
     if (isDraggingIcon) {
       const newLeft = e.clientX + dragOffsetX;
       const newTop = e.clientY + dragOffsetY;
-      
+
       // Keep within viewport bounds
       floatingIcon.style.left = `${Math.max(4, Math.min(window.innerWidth - 28, newLeft))}px`;
       floatingIcon.style.top = `${Math.max(4, Math.min(window.innerHeight - 28, newTop))}px`;
@@ -310,15 +342,15 @@
 
   function onIconDragEnd(e) {
     floatingIcon.style.cursor = 'grab';
-    
+
     if (isDraggingIcon) {
-      // Snap back to nearest edge for comfortable icon placement
+      // Keep position where dropped
       const rect = floatingIcon.getBoundingClientRect();
       const scrollX = window.scrollX || window.pageXOffset;
       const scrollY = window.scrollY || window.pageYOffset;
-      
+
       floatingIcon.style.transition = 'transform 0.15s ease, opacity 0.15s ease';
-      
+
       // Save the manual position
       savedIconPosition = {
         top: rect.top + scrollY,
@@ -330,7 +362,7 @@
       // Simple click, not a drag
       toggleActionMenu();
     }
-    
+
     document.removeEventListener('mousemove', onIconDrag);
     document.removeEventListener('mouseup', onIconDragEnd);
   }
@@ -345,7 +377,7 @@
 
   function showActionMenu() {
     if (!floatingIcon) return;
-    
+
     if (!actionMenu) {
       createActionMenu();
     }
@@ -365,7 +397,7 @@
     if (left + menuWidth > window.innerWidth) {
       left = window.innerWidth - menuWidth - 4;
     }
-    
+
     Object.assign(actionMenu.style, {
       top: `${top}px`,
       left: `${left}px`,
@@ -392,7 +424,7 @@
 
     actionMenu = document.createElement('div');
     actionMenu.id = 'llm-assistant-menu';
-    
+
     Object.assign(actionMenu.style, {
       position: 'absolute',
       minWidth: '200px',
@@ -410,7 +442,7 @@
 
     // Menu header
     const header = document.createElement('div');
-    header.textContent = 'LLM Assistent';
+    header.textContent = t('menuHeader');
     Object.assign(header.style, {
       padding: '6px 10px',
       fontWeight: '600',
@@ -439,7 +471,7 @@
       actionMenu.appendChild(sep);
 
       const customHeader = document.createElement('div');
-      customHeader.textContent = 'Eigene Aktionen';
+      customHeader.textContent = t('menuCustomActions');
       Object.assign(customHeader.style, {
         padding: '6px 10px',
         fontWeight: '600',
@@ -470,8 +502,8 @@
       const freePromptItem = document.createElement('div');
       freePromptItem.className = 'llm-action-item';
       freePromptItem.dataset.action = 'freePrompt';
-      freePromptItem.textContent = '💬 Freier Prompt';
-      
+      freePromptItem.textContent = t('menuFreePrompt');
+
       Object.assign(freePromptItem.style, {
         padding: '8px 10px',
         cursor: 'pointer',
@@ -488,11 +520,11 @@
       freePromptItem.addEventListener('mouseenter', () => {
         freePromptItem.style.backgroundColor = '#f0f4f8';
       });
-      
+
       freePromptItem.addEventListener('mouseleave', () => {
         freePromptItem.style.backgroundColor = 'transparent';
       });
-      
+
       freePromptItem.addEventListener('mousedown', (e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -506,14 +538,14 @@
     actionMenu.addEventListener('mousedown', (e) => {
       e.preventDefault();
     });
-    
+
     actionMenu.addEventListener('mouseenter', () => {
       if (hideTimeout) {
         clearTimeout(hideTimeout);
         hideTimeout = null;
       }
     });
-    
+
     actionMenu.addEventListener('mouseleave', () => {
       hideTimeout = setTimeout(() => {
         hideFloatingIcon();
@@ -529,7 +561,7 @@
     item.className = 'llm-action-item';
     item.dataset.action = actionId;
     item.textContent = displayTitle;
-    
+
     Object.assign(item.style, {
       padding: '8px 10px',
       cursor: 'pointer',
@@ -545,11 +577,11 @@
     item.addEventListener('mouseenter', () => {
       item.style.backgroundColor = '#f0f4f8';
     });
-    
+
     item.addEventListener('mouseleave', () => {
       item.style.backgroundColor = 'transparent';
     });
-    
+
     item.addEventListener('mousedown', (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -559,35 +591,325 @@
     return item;
   }
 
+  // =====================================================================
+  //  STREAMING CORE
+  // =====================================================================
+
+  function getOrCreatePort() {
+    if (streamPort) {
+      try {
+        // Probe the port is still alive
+        streamPort.postMessage({ action: "ping" });
+        return streamPort;
+      } catch (e) {
+        streamPort = null;
+      }
+    }
+    try {
+      streamPort = chrome.runtime.connect({ name: "llmStream" });
+      streamPort.onMessage.addListener(onPortMessage);
+      streamPort.onDisconnect.addListener(() => {
+        streamPort = null;
+      });
+    } catch (e) {
+      streamPort = null;
+    }
+    return streamPort;
+  }
+
+  // Per-request listeners: requestId -> {onToken, onDone, onError, onAborted}
+  const streamListeners = new Map();
+
+  function onPortMessage(msg) {
+    if (!msg || typeof msg.requestId !== "number") return;
+    const listener = streamListeners.get(msg.requestId);
+    if (!listener) return;
+
+    if (msg.type === "token" && listener.onToken) {
+      listener.onToken(msg.token);
+    } else if (msg.type === "done") {
+      streamListeners.delete(msg.requestId);
+      if (listener.onDone) listener.onDone(msg.text || "");
+    } else if (msg.type === "error") {
+      streamListeners.delete(msg.requestId);
+      if (listener.onError) listener.onError(new Error(msg.error || t('errorGeneric')));
+    } else if (msg.type === "aborted") {
+      streamListeners.delete(msg.requestId);
+      if (listener.onAborted) listener.onAborted();
+    }
+  }
+
+  // Start a streaming action request. Returns the requestId.
+  function startActionStream(textAction, text, isFullText, handlers) {
+    const port = getOrCreatePort();
+    if (!port) return null;
+
+    const requestId = ++nextLocalRequestId;
+    streamListeners.set(requestId, handlers);
+    currentRequestId = requestId;
+
+    try {
+      port.postMessage({
+        action: "start",
+        requestId,
+        mode: "action",
+        textAction,
+        text,
+        isFullText
+      });
+    } catch (e) {
+      streamListeners.delete(requestId);
+      currentRequestId = null;
+      return null;
+    }
+    return requestId;
+  }
+
+  function startFreePromptStream(messages, handlers) {
+    const port = getOrCreatePort();
+    if (!port) return null;
+
+    const requestId = ++nextLocalRequestId;
+    streamListeners.set(requestId, handlers);
+    currentRequestId = requestId;
+
+    try {
+      port.postMessage({
+        action: "start",
+        requestId,
+        mode: "freePrompt",
+        messages
+      });
+    } catch (e) {
+      streamListeners.delete(requestId);
+      currentRequestId = null;
+      return null;
+    }
+    return requestId;
+  }
+
+  function cancelCurrentRequest() {
+    const requestId = currentRequestId;
+    if (requestId === null) return;
+    currentRequestId = null;
+
+    const port = getOrCreatePort();
+    if (port) {
+      try {
+        port.postMessage({ action: "abort", requestId });
+      } catch (e) { /* ignore */ }
+    }
+    chrome.runtime.sendMessage({ action: "abortRequest", requestId }, () => {
+      // Swallow errors — abort is best-effort
+      if (chrome.runtime.lastError) { /* ignore */ }
+    });
+
+    streamListeners.delete(requestId);
+  }
+
+  // =====================================================================
+  //  ACTION EXECUTION (floating menu, full-text replacement)
+  // =====================================================================
+
   function executeAction(actionId) {
     if (!activeInputElement) return;
 
     const text = getElementFullText(activeInputElement);
     if (!text.trim()) {
-      showErrorNotification('Kein Text im Eingabefeld vorhanden');
+      showErrorNotification(t('errorNoText'));
       return;
     }
 
     // Store element reference before hiding UI
     lastProcessedElement = activeInputElement;
+    const targetElement = activeInputElement;
 
     hideActionMenu();
-    hideFloatingIcon();
 
-    // Send to background script
-    chrome.runtime.sendMessage({
-      action: "processFullText",
-      textAction: actionId,
-      text: text
-    }, (response) => {
-      if (chrome.runtime.lastError) {
-        showErrorNotification('Fehler: ' + chrome.runtime.lastError.message);
+    // Capture undo state before any modification
+    captureUndoState(targetElement, text, null, null, true);
+
+    showProcessingIndicator();
+
+    let accumulated = "";
+    let cleaned = false;
+
+    const finish = (finalText) => {
+      hideProcessingIndicator();
+      currentRequestId = null;
+      replaceFullTextInElement(targetElement, finalText);
+      showUndoToast();
+      activeInputElement = targetElement;
+      lastProcessedElement = null;
+      showFloatingIcon();
+    };
+
+    const requestId = startActionStream(actionId, text, true, {
+      onToken: (token) => {
+        accumulated += token;
+        if (!cleaned && accumulated.trim().length > 0) {
+          // Clear the original text as soon as real content arrives
+          replaceFullTextInElement(targetElement, accumulated);
+          cleaned = true;
+        } else if (cleaned) {
+          replaceFullTextInElement(targetElement, accumulated);
+        }
+      },
+      onDone: (finalText) => {
+        finish(finalText || accumulated);
+      },
+      onError: (err) => {
+        hideProcessingIndicator();
+        currentRequestId = null;
+        // Restore original text on error
+        replaceFullTextInElement(targetElement, text);
+        lastUndoState = null;
+        showErrorNotification(err.message);
+      },
+      onAborted: () => {
+        hideProcessingIndicator();
+        currentRequestId = null;
+        // Keep what was generated so far if any, else restore original
+        if (accumulated.trim().length > 0) {
+          replaceFullTextInElement(targetElement, accumulated);
+          showUndoToast();
+        } else {
+          replaceFullTextInElement(targetElement, text);
+          lastUndoState = null;
+        }
+        showInfoNotification(t('requestCancelled'));
       }
     });
 
-    // Show processing indicator
-    showProcessingIndicator();
+    if (requestId === null) {
+      // Streaming not available — legacy fallback via sendMessage
+      chrome.runtime.sendMessage({
+        action: "processFullText",
+        textAction: actionId,
+        text: text
+      }, (response) => {
+        if (chrome.runtime.lastError) {
+          hideProcessingIndicator();
+          currentRequestId = null;
+          showErrorNotification(chrome.runtime.lastError.message);
+        }
+      });
+    }
   }
+
+  // Context-menu initiated processing (selection replacement), streaming via port.
+  function handleContextMenuProcess(textAction, text) {
+    return new Promise((resolve, reject) => {
+      const activeElement = document.activeElement;
+      if (!activeElement || !isTextInput(activeElement)) {
+        reject(new Error("No suitable active element"));
+        return;
+      }
+
+      // Capture selection info for undo + replacement
+      let selStart = null, selEnd = null;
+      if (activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA') {
+        selStart = activeElement.selectionStart;
+        selEnd = activeElement.selectionEnd;
+      }
+
+      const originalFullText = getElementFullText(activeElement);
+      captureUndoState(
+        activeElement,
+        selStart !== null
+          ? originalFullText.substring(0, selStart) + text + originalFullText.substring(selEnd)
+          : originalFullText,
+        selStart, selEnd, false
+      );
+
+      let accumulated = "";
+      let cleaned = false;
+      activeInputElement = activeElement;
+      showProcessingIndicator();
+
+      const applyChunk = (newText) => {
+        replaceSelectedStreamingText(activeElement, selStart, selEnd, text, newText);
+      };
+
+      startActionStream(textAction, text, false, {
+        onToken: (token) => {
+          accumulated += token;
+          if (!cleaned && accumulated.trim().length > 0) {
+            applyChunk(accumulated);
+            cleaned = true;
+          } else if (cleaned) {
+            applyChunk(accumulated);
+          }
+        },
+        onDone: (finalText) => {
+          hideProcessingIndicator();
+          currentRequestId = null;
+          const final = finalText || accumulated;
+          applyChunk(final);
+          showUndoToast();
+          resolve();
+        },
+        onError: (err) => {
+          hideProcessingIndicator();
+          currentRequestId = null;
+          lastUndoState = null;
+          showErrorNotification(err.message);
+          resolve(); // resolve anyway; background already handled fallback separately
+        },
+        onAborted: () => {
+          hideProcessingIndicator();
+          currentRequestId = null;
+          if (accumulated.trim().length > 0) {
+            applyChunk(accumulated);
+            showUndoToast();
+          } else {
+            lastUndoState = null;
+          }
+          showInfoNotification(t('requestCancelled'));
+          resolve();
+        }
+      }) || reject(new Error("Streaming not available"));
+    });
+  }
+
+  // For selection-mode streaming: replace the original selected range with current accumulated text.
+  function replaceSelectedStreamingText(el, selStart, selEnd, originalSelection, newText) {
+    if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+      // Current value may already contain partially replaced text. We track via data attribute.
+      const fullOriginal = originalSelection;
+      const currentValue = el.value;
+
+      if (cleanedSelection.has(el)) {
+        // The element already contains streaming text; we stored the original full value
+        const state = cleanedSelection.get(el);
+        const before = state.before;
+        const after = state.after;
+        el.value = before + newText + after;
+        const cursor = before.length + newText.length;
+        el.setSelectionRange(cursor, cursor);
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        return;
+      }
+
+      // First write: capture before/after from current DOM values
+      const start = selStart !== null ? selStart : 0;
+      const end = selEnd !== null ? selEnd : start;
+      const before = currentValue.substring(0, start);
+      const after = currentValue.substring(end);
+      cleanedSelection.set(el, { before, after });
+      el.value = before + newText + after;
+      const cursor = before.length + newText.length;
+      el.setSelectionRange(cursor, cursor);
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    } else if (el.isContentEditable) {
+      // ContentEditable streaming: replace entire content (simpler, robust)
+      el.innerText = newText;
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+  }
+
+  // Track selection-stream state per element
+  const cleanedSelection = new WeakMap();
 
   function getElementFullText(element) {
     if (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA') {
@@ -605,14 +927,20 @@
   let chatWindow = null;
   let chatMessages = []; // Conversation history for the current chat session
   let pendingElement = null;
+  let chatStreamingBubble = null;
+  let chatStreamingText = "";
+  let chatSendBtn = null;
+  let chatInputField = null;
 
-  const SYSTEM_PROMPT = "Du bist ein hilfreicher Text-Assistent. Bearbeite und formuliere Text anhand der Anweisungen des Nutzers. Antworte nur mit dem verarbeiteten Text, ohne zusätzliche Erklärungen, es sei denn, der Nutzer bittet darum.";
+  function getFreePromptSystem() {
+    return t('freePromptSystem');
+  }
 
   function buildInitialChatMessages(contextText) {
-    let systemContent = SYSTEM_PROMPT;
+    let systemContent = getFreePromptSystem();
 
     if (contextText && contextText.trim()) {
-      systemContent += "\n\nDer Nutzer hat folgenden Text aus seinem Eingabefeld als Kontext geladen. Beziehe dich bei allen Anweisungen auf diesen Text:\n\n---\n" + contextText + "\n---";
+      systemContent += "\n\n" + t('freePromptContextIntro') + "\n\n---\n" + contextText + "\n---";
     }
 
     return [
@@ -637,8 +965,6 @@
     // Load the current text from the input element as context
     const contextText = getElementFullText(pendingElement);
 
-    // Reset conversation — start fresh with a system prompt for text modification
-    // plus the input field text as context
     chatMessages = buildInitialChatMessages(contextText);
 
     // Create overlay
@@ -672,10 +998,11 @@
       backgroundColor: '#4a90d9',
       color: '#fff',
       fontWeight: '600',
-      fontSize: '15px',
-      cursor: 'move'
+      fontSize: '15px'
     });
-    header.innerHTML = '<span>💬 Freier Prompt</span>';
+    const headerTitle = document.createElement('span');
+    headerTitle.textContent = t('chatTitle');
+    header.appendChild(headerTitle);
 
     const closeBtn = document.createElement('span');
     closeBtn.textContent = '✕';
@@ -710,9 +1037,9 @@
 
     // Welcome message
     if (contextText && contextText.trim()) {
-      addChatMessage('assistant', 'Text aus dem Eingabefeld wurde als Kontext geladen. Du kannst jetzt Anweisungen geben, z.B. "Verbessere den Text" oder "Übersetze ins Englische".', messagesArea);
+      addChatMessage('assistant', t('chatWelcomeWithContext'), messagesArea);
     } else {
-      addChatMessage('assistant', 'Beschreibe, was mit deinem Text passieren soll. Du kannst mehrere Anweisungen nacheinander senden. Klicke auf **Übernehmen**, um das Ergebnis ins Textfeld einzusetzen.', messagesArea);
+      addChatMessage('assistant', t('chatWelcomeNoContext'), messagesArea);
     }
 
     // --- Input area ---
@@ -727,7 +1054,8 @@
 
     const inputField = document.createElement('input');
     inputField.type = 'text';
-    inputField.placeholder = 'Anweisung eingeben...';
+    inputField.placeholder = t('chatInputPlaceholder');
+    chatInputField = inputField;
     Object.assign(inputField.style, {
       flex: '1',
       padding: '8px 12px',
@@ -745,7 +1073,8 @@
     });
 
     const sendBtn = document.createElement('button');
-    sendBtn.textContent = 'Senden';
+    sendBtn.textContent = t('chatSend');
+    chatSendBtn = sendBtn;
     Object.assign(sendBtn.style, {
       padding: '8px 16px',
       backgroundColor: '#4a90d9',
@@ -757,10 +1086,18 @@
       fontSize: '13px',
       transition: 'background-color 0.15s'
     });
-    sendBtn.addEventListener('mouseenter', () => { sendBtn.style.backgroundColor = '#3a7bc8'; });
-    sendBtn.addEventListener('mouseleave', () => { sendBtn.style.backgroundColor = '#4a90d9'; });
+    sendBtn.addEventListener('mouseenter', () => {
+      if (!sendBtn.dataset.stop) sendBtn.style.backgroundColor = '#3a7bc8';
+    });
+    sendBtn.addEventListener('mouseleave', () => {
+      if (!sendBtn.dataset.stop) sendBtn.style.backgroundColor = '#4a90d9';
+    });
     sendBtn.addEventListener('click', () => {
-      sendChatMessage(inputField, messagesArea);
+      if (sendBtn.dataset.stop === '1') {
+        cancelCurrentRequest();
+      } else {
+        sendChatMessage(inputField, messagesArea);
+      }
     });
 
     inputArea.appendChild(inputField);
@@ -778,7 +1115,7 @@
     });
 
     const resetBtn = document.createElement('button');
-    resetBtn.textContent = '↺ Zurücksetzen';
+    resetBtn.textContent = t('chatReset');
     Object.assign(resetBtn.style, {
       padding: '7px 14px',
       backgroundColor: '#e2e8f0',
@@ -797,7 +1134,7 @@
     });
 
     const applyBtn = document.createElement('button');
-    applyBtn.textContent = '✓ Übernehmen';
+    applyBtn.textContent = t('chatApply');
     Object.assign(applyBtn.style, {
       padding: '7px 18px',
       backgroundColor: '#2ecc71',
@@ -836,16 +1173,23 @@
     messagesArea.innerHTML = '';
 
     if (contextText && contextText.trim()) {
-      addChatMessage('assistant', 'Chat zurückgesetzt. Text aus dem Eingabefeld wurde neu als Kontext geladen. Was möchtest du damit machen?', messagesArea);
+      addChatMessage('assistant', t('chatResetWithContext'), messagesArea);
     } else {
-      addChatMessage('assistant', 'Chat zurückgesetzt. Was möchtest du mit deinem Text machen?', messagesArea);
+      addChatMessage('assistant', t('chatResetNoContext'), messagesArea);
     }
   }
 
   function addChatMessage(role, content, messagesArea) {
     const msgDiv = document.createElement('div');
+    renderChatMessageContent(msgDiv, role, content);
+    messagesArea.appendChild(msgDiv);
+    messagesArea.scrollTop = messagesArea.scrollHeight;
+    return msgDiv;
+  }
+
+  function renderChatMessageContent(msgDiv, role, content) {
     const isUser = role === 'user';
-    
+
     Object.assign(msgDiv.style, {
       alignSelf: isUser ? 'flex-end' : 'flex-start',
       maxWidth: '85%',
@@ -865,9 +1209,19 @@
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
       .replace(/\n/g, '<br>');
     msgDiv.innerHTML = html;
+  }
 
-    messagesArea.appendChild(msgDiv);
-    messagesArea.scrollTop = messagesArea.scrollHeight;
+  function setSendButtonStopMode(stopMode) {
+    if (!chatSendBtn) return;
+    if (stopMode) {
+      chatSendBtn.dataset.stop = '1';
+      chatSendBtn.textContent = t('chatStop');
+      chatSendBtn.style.backgroundColor = '#e74c3c';
+    } else {
+      delete chatSendBtn.dataset.stop;
+      chatSendBtn.textContent = t('chatSend');
+      chatSendBtn.style.backgroundColor = '#4a90d9';
+    }
   }
 
   function sendChatMessage(inputField, messagesArea) {
@@ -879,10 +1233,12 @@
     chatMessages.push({ role: 'user', content: userMessage });
     inputField.value = '';
     inputField.disabled = true;
+    setSendButtonStopMode(true);
 
-    // Show typing indicator
-    const typingDiv = document.createElement('div');
-    Object.assign(typingDiv.style, {
+    // Prepare streaming bubble
+    chatStreamingText = "";
+    chatStreamingBubble = document.createElement('div');
+    Object.assign(chatStreamingBubble.style, {
       alignSelf: 'flex-start',
       padding: '8px 12px',
       borderRadius: '10px',
@@ -891,45 +1247,110 @@
       fontSize: '13px',
       fontStyle: 'italic'
     });
-    typingDiv.textContent = 'Generiere Antwort...';
-    typingDiv.id = 'llm-chat-typing';
-    messagesArea.appendChild(typingDiv);
+    chatStreamingBubble.textContent = t('chatGenerating');
+    messagesArea.appendChild(chatStreamingBubble);
     messagesArea.scrollTop = messagesArea.scrollHeight;
 
-    // Send to background
-    chrome.runtime.sendMessage({
-      action: "processFreePrompt",
-      messages: chatMessages
-    }, (response) => {
-      // Remove typing indicator
-      const typing = document.getElementById('llm-chat-typing');
-      if (typing) typing.remove();
-
+    const finishStream = (finalText) => {
+      setSendButtonStopMode(false);
       inputField.disabled = false;
       inputField.focus();
 
-      if (chrome.runtime.lastError) {
-        addChatMessage('assistant', 'Fehler: ' + chrome.runtime.lastError.message, messagesArea);
-        return;
+      const text = finalText || chatStreamingText;
+      if (chatStreamingBubble) {
+        renderChatMessageContent(chatStreamingBubble, 'assistant', text);
+        chatStreamingBubble.style.fontStyle = 'normal';
+        chatStreamingBubble.style.color = '#2c3e50';
       }
+      chatMessages.push({ role: 'assistant', content: text });
+      chatStreamingBubble = null;
+      chatStreamingText = "";
+      messagesArea.scrollTop = messagesArea.scrollHeight;
+    };
 
-      if (response && response.success && response.text) {
-        const assistantMessage = response.text;
-        chatMessages.push({ role: 'assistant', content: assistantMessage });
-        addChatMessage('assistant', assistantMessage, messagesArea);
-      } else {
-        const errMsg = (response && response.error) ? response.error : 'Unbekannter Fehler';
-        addChatMessage('assistant', '❌ Fehler: ' + errMsg, messagesArea);
+    const requestId = startFreePromptStream(chatMessages, {
+      onToken: (token) => {
+        if (!chatStreamingBubble) return;
+        chatStreamingText += token;
+        chatStreamingBubble.style.fontStyle = 'normal';
+        chatStreamingBubble.style.color = '#2c3e50';
+        renderChatMessageContent(chatStreamingBubble, 'assistant', chatStreamingText);
+        messagesArea.scrollTop = messagesArea.scrollHeight;
+      },
+      onDone: (finalText) => {
+        currentRequestId = null;
+        finishStream(finalText);
+      },
+      onError: (err) => {
+        currentRequestId = null;
+        setSendButtonStopMode(false);
+        inputField.disabled = false;
+        if (chatStreamingBubble) {
+          renderChatMessageContent(chatStreamingBubble, 'assistant', '❌ ' + err.message);
+          chatStreamingBubble.style.fontStyle = 'normal';
+          chatStreamingBubble = null;
+          chatStreamingText = "";
+        }
+      },
+      onAborted: () => {
+        currentRequestId = null;
+        setSendButtonStopMode(false);
+        inputField.disabled = false;
+        inputField.focus();
+        if (chatStreamingText.trim().length > 0) {
+          if (chatStreamingBubble) {
+            renderChatMessageContent(chatStreamingBubble, 'assistant', chatStreamingText);
+            chatStreamingBubble.style.fontStyle = 'normal';
+            chatStreamingBubble.style.color = '#2c3e50';
+          }
+          chatMessages.push({ role: 'assistant', content: chatStreamingText });
+        } else if (chatStreamingBubble) {
+          chatStreamingBubble.remove();
+        }
+        chatStreamingBubble = null;
+        chatStreamingText = "";
       }
     });
+
+    if (requestId === null) {
+      // Legacy non-streaming fallback
+      chrome.runtime.sendMessage({
+        action: "processFreePrompt",
+        messages: chatMessages
+      }, (response) => {
+        currentRequestId = null;
+        setSendButtonStopMode(false);
+        inputField.disabled = false;
+        inputField.focus();
+
+        if (chatStreamingBubble) {
+          chatStreamingBubble.remove();
+          chatStreamingBubble = null;
+        }
+
+        if (chrome.runtime.lastError) {
+          addChatMessage('assistant', chrome.runtime.lastError.message, messagesArea);
+          return;
+        }
+
+        if (response && response.success && response.text) {
+          const assistantMessage = response.text;
+          chatMessages.push({ role: 'assistant', content: assistantMessage });
+          addChatMessage('assistant', assistantMessage, messagesArea);
+        } else {
+          const errMsg = (response && response.error) ? response.error : t('errorGeneric');
+          addChatMessage('assistant', '❌ ' + errMsg, messagesArea);
+        }
+      });
+    }
   }
 
   function applyLastResult() {
     // Find the last assistant message in the conversation
     const lastAssistantMsg = [...chatMessages].reverse().find(m => m.role === 'assistant');
-    
+
     if (!lastAssistantMsg) {
-      showErrorNotification('Kein generierter Text zum Übernehmen vorhanden.');
+      showErrorNotification(t('errorNoResult'));
       return;
     }
 
@@ -937,19 +1358,24 @@
 
     // Use pendingElement or activeInputElement
     const targetElement = pendingElement || activeInputElement;
-    
+
     if (!targetElement) {
-      showErrorNotification('Kein Eingabefeld gefunden.');
+      showErrorNotification(t('errorNoElement'));
       return;
     }
 
+    // Capture undo state before applying
+    const originalText = getElementFullText(targetElement);
+    captureUndoState(targetElement, originalText, null, null, true);
+
     replaceFullTextInElement(targetElement, resultText);
+    showUndoToast();
 
     // Re-show floating icon
     activeInputElement = targetElement;
     lastProcessedElement = null;
     pendingElement = null;
-    
+
     // Close chat window
     closeChatWindow();
 
@@ -958,10 +1384,17 @@
   }
 
   function closeChatWindow() {
+    if (currentRequestId !== null) {
+      cancelCurrentRequest();
+    }
     if (chatWindow) {
       chatWindow.remove();
       chatWindow = null;
       chatMessages = [];
+      chatStreamingBubble = null;
+      chatStreamingText = "";
+      chatSendBtn = null;
+      chatInputField = null;
     }
   }
 
@@ -970,23 +1403,29 @@
   // =====================================================================
 
   function showProcessingIndicator() {
-    // Change icon to show loading state
+    // Change icon to show loading state — click to cancel
     if (floatingIcon) {
       floatingIcon.innerHTML = '⏳';
       floatingIcon.style.display = 'flex';
+      floatingIcon.title = t('iconTooltipProcessing');
+      floatingIcon.style.cursor = 'pointer';
     }
-    
-    // Auto-reset after 30 seconds (fallback)
+
+    // Auto-reset after 60 seconds (fallback in case of a bug)
     setTimeout(() => {
-      if (floatingIcon) {
+      if (floatingIcon && currentRequestId === null) {
         floatingIcon.innerHTML = '🤖';
+        floatingIcon.title = '';
+        floatingIcon.style.cursor = 'grab';
       }
-    }, 30000);
+    }, 60000);
   }
 
   function hideProcessingIndicator() {
     if (floatingIcon) {
       floatingIcon.innerHTML = '🤖';
+      floatingIcon.title = '';
+      floatingIcon.style.cursor = 'grab';
     }
   }
 
@@ -1002,7 +1441,7 @@
           return;
         }
       }
-      
+
       // Use native setter for better React/framework compatibility
       try {
         const descriptor = Object.getOwnPropertyDescriptor(el.constructor.prototype, 'value');
@@ -1014,45 +1453,51 @@
       } catch (e) {
         el.value = newText;
       }
-      
+
       // Move cursor to end
-      el.selectionStart = el.selectionEnd = newText.length;
-      
+      try {
+        el.selectionStart = el.selectionEnd = newText.length;
+      } catch (e) { /* ignore */ }
+
       // Dispatch events to notify frameworks
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
-      
+
       // Also trigger React-specific events
       const tracker = el._valueTracker;
       if (tracker) {
         tracker.setValue(newText);
       }
-      
+
     } else if (el.isContentEditable) {
       if (!document.contains(el)) {
         console.warn("[LLM Content] ContentEditable element no longer in DOM");
         return;
       }
-      
+
       el.innerText = newText;
-      
+
       el.dispatchEvent(new Event('input', { bubbles: true }));
     }
   }
 
   function replaceFullText(newText) {
     hideProcessingIndicator();
-    
+
     // Use lastProcessedElement if activeInputElement was cleared
     const targetElement = activeInputElement || lastProcessedElement;
-    
+
     if (!targetElement) {
       console.warn("[LLM Content] No active element for full text replacement");
       return;
     }
 
     let el = targetElement;
+    // Capture undo state for the non-streaming legacy path
+    const originalText = getElementFullText(el);
+    captureUndoState(el, originalText, null, null, true);
     replaceFullTextInElement(el, newText);
+    showUndoToast();
 
     // Re-show icon after replacement
     activeInputElement = el;
@@ -1080,6 +1525,8 @@
       }
 
       const originalValue = el.value;
+      captureUndoState(el, originalValue, start, end, false);
+
       const before = originalValue.substring(0, start);
       const after = originalValue.substring(end);
 
@@ -1092,6 +1539,7 @@
       el.dispatchEvent(new Event("input", { bubbles: true }));
       el.dispatchEvent(new Event("change", { bubbles: true }));
 
+      showUndoToast();
       return;
     }
 
@@ -1111,13 +1559,15 @@
         return;
       }
 
+      captureUndoState(activeElement, activeElement.innerText || '', null, null, true);
+
       // Delete selected content
       range.deleteContents();
 
       // Insert new text, handling newlines as <br> in contenteditable
       const lines = newText.split("\n");
       let lastNode = null;
-      
+
       lines.forEach((line, index) => {
         if (line) {
           const textNode = document.createTextNode(line);
@@ -1126,7 +1576,7 @@
           range.setStartAfter(textNode);
           range.setEndAfter(textNode);
         }
-        
+
         if (index < lines.length - 1) {
           const br = document.createElement("br");
           range.insertNode(br);
@@ -1147,15 +1597,196 @@
       // Dispatch input event
       activeElement.dispatchEvent(new Event("input", { bubbles: true }));
 
+      showUndoToast();
       return;
     }
 
     console.warn("Active element is not a supported input type");
   }
 
+  // =====================================================================
+  //  UNDO TOAST
+  // =====================================================================
+
+  function captureUndoState(element, originalText, selStart, selEnd, isFullText) {
+    lastUndoState = {
+      element,
+      originalText,
+      selStart,
+      selEnd,
+      isFullText
+    };
+  }
+
+  function showUndoToast() {
+    if (!lastUndoState) return;
+    showToast({
+      message: t('undoReplaced'),
+      buttonLabel: t('undoButton'),
+      backgroundColor: '#2ecc71',
+      duration: 8000,
+      onButton: () => {
+        restoreUndoState();
+      }
+    });
+  }
+
+  function restoreUndoState() {
+    const state = lastUndoState;
+    lastUndoState = null;
+    hideUndoToast();
+
+    if (!state || !state.element) return;
+
+    const el = document.contains(state.element) ? state.element : document.activeElement;
+    if (!el) return;
+
+    if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+      try {
+        const descriptor = Object.getOwnPropertyDescriptor(el.constructor.prototype, 'value');
+        if (descriptor && descriptor.set) {
+          descriptor.set.call(el, state.originalText);
+        } else {
+          el.value = state.originalText;
+        }
+      } catch (e) {
+        el.value = state.originalText;
+      }
+
+      if (state.selStart !== null && state.selEnd !== null) {
+        try {
+          el.setSelectionRange(state.selStart, state.selEnd);
+        } catch (e) { /* ignore */ }
+      }
+
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      el.focus();
+    } else if (el.isContentEditable) {
+      el.innerText = state.originalText;
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.focus();
+    }
+
+    cleanedSelection.delete(el);
+  }
+
+  function hideUndoToast() {
+    if (undoToastTimer) {
+      clearTimeout(undoToastTimer);
+      undoToastTimer = null;
+    }
+    if (undoToast) {
+      undoToast.remove();
+      undoToast = null;
+    }
+  }
+
+  // =====================================================================
+  //  NOTIFICATIONS (error / info / toast)
+  // =====================================================================
+
+  function showToast({ message, buttonLabel, backgroundColor, duration, onButton }) {
+    hideUndoToast();
+
+    const toast = document.createElement('div');
+    toast.id = 'llm-assistant-toast';
+
+    Object.assign(toast.style, {
+      position: 'fixed',
+      bottom: '24px',
+      right: '24px',
+      backgroundColor: backgroundColor || '#323232',
+      color: 'white',
+      padding: '12px 16px',
+      borderRadius: '8px',
+      boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+      zIndex: '2147483647',
+      fontFamily: 'system-ui, -apple-system, sans-serif',
+      fontSize: '14px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '12px',
+      maxWidth: '420px',
+      lineHeight: '1.4',
+      opacity: '0',
+      transform: 'translateY(8px)',
+      transition: 'opacity 0.2s ease, transform 0.2s ease'
+    });
+
+    const msgSpan = document.createElement('span');
+    msgSpan.textContent = message;
+    toast.appendChild(msgSpan);
+
+    if (buttonLabel && onButton) {
+      const btn = document.createElement('button');
+      btn.textContent = buttonLabel;
+      Object.assign(btn.style, {
+        backgroundColor: 'rgba(255,255,255,0.22)',
+        color: '#fff',
+        border: 'none',
+        borderRadius: '6px',
+        padding: '6px 12px',
+        cursor: 'pointer',
+        fontWeight: '600',
+        fontSize: '13px',
+        whiteSpace: 'nowrap',
+        transition: 'background-color 0.15s'
+      });
+      btn.addEventListener('mouseenter', () => { btn.style.backgroundColor = 'rgba(255,255,255,0.35)'; });
+      btn.addEventListener('mouseleave', () => { btn.style.backgroundColor = 'rgba(255,255,255,0.22)'; });
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onButton();
+      });
+      toast.appendChild(btn);
+    }
+
+    document.body.appendChild(toast);
+    undoToast = toast;
+
+    // Animate in
+    requestAnimationFrame(() => {
+      toast.style.opacity = '1';
+      toast.style.transform = 'translateY(0)';
+    });
+
+    // Hover pauses auto-hide
+    let remaining = duration;
+    let timerStart = Date.now();
+    const startTimer = () => {
+      timerStart = Date.now();
+      undoToastTimer = setTimeout(() => {
+        hideUndoToast();
+        lastUndoState = null;
+      }, remaining);
+    };
+    const stopTimer = () => {
+      if (undoToastTimer) {
+        clearTimeout(undoToastTimer);
+        undoToastTimer = null;
+        remaining -= (Date.now() - timerStart);
+        if (remaining < 1000) remaining = 1000;
+      }
+    };
+    toast.addEventListener('mouseenter', stopTimer);
+    toast.addEventListener('mouseleave', startTimer);
+
+    startTimer();
+  }
+
+  function showInfoNotification(message) {
+    showToast({
+      message: message,
+      backgroundColor: '#4a90d9',
+      duration: 4000
+    });
+  }
+
   function showErrorNotification(message) {
     hideProcessingIndicator();
-    
+
     // Remove existing notification if present
     const existing = document.getElementById("llm-assistant-error");
     if (existing) {
@@ -1164,7 +1795,7 @@
 
     const notification = document.createElement("div");
     notification.id = "llm-assistant-error";
-    notification.textContent = "LLM Text Assistent: " + message;
+    notification.textContent = t('errorPrefix') + message;
 
     Object.assign(notification.style, {
       position: "fixed",
@@ -1185,12 +1816,12 @@
 
     document.body.appendChild(notification);
 
-    // Auto-remove after 5 seconds
+    // Auto-remove after 6 seconds
     setTimeout(() => {
       if (notification.parentNode) {
         notification.remove();
       }
-    }, 5000);
+    }, 6000);
   }
 
   // Initialize when DOM is ready
