@@ -79,7 +79,7 @@
       sendResponse({ success: true });
     } else if (request.action === "contextMenuProcess") {
       // Context menu selection replacement, handled with streaming via port.
-      handleContextMenuProcess(request.textAction, request.text)
+      handleContextMenuProcess(request.textAction, request.text, request.selectionInfo)
         .then(() => sendResponse({ success: true }))
         .catch(() => sendResponse({ success: false }));
       return true;
@@ -869,20 +869,36 @@
       undoSelEnd = sel.end;
       streamSourceText = rawText;
     } else if (sel.mode === 'ce') {
-      originalFullText = getElementFullText(el);
+      if (sel.range) {
+        try {
+          el.focus();
+          const selection = window.getSelection();
+          selection.removeAllRanges();
+          selection.addRange(sel.range);
+        } catch (e) { /* ignore */ }
+      }
+      undoSelStart = null;
+      undoSelEnd = null;
+    } else if (sel.mode === 'ce-frozen') {
+      // No live range was available: the LLM has already received the frozen
+      // selection text as input, so this run is intentionally full-field. We
+      // capture undo state now (full content) and write the replacement over
+      // the whole element.
       try {
         el.focus();
-        const selection = window.getSelection();
-        selection.removeAllRanges();
-        selection.addRange(sel.range);
       } catch (e) { /* ignore */ }
+      originalFullText = getElementFullText(el);
       undoSelStart = null;
       undoSelEnd = null;
     } else {
       return;
     }
 
-    const hasTextToProcess = String(streamSourceText).trim().length > 0;
+    let hasTextToProcess = String(streamSourceText).trim().length > 0;
+    if (!hasTextToProcess && rawTextFallback && String(rawTextFallback).trim().length > 0) {
+      streamSourceText = rawTextFallback;
+      hasTextToProcess = true;
+    }
     const text = hasTextToProcess
       ? streamSourceText
       : (originalFullText || '');
@@ -899,16 +915,34 @@
     activeInputElement = el;
 
     let accumulated = "";
+    const isCE = sel.mode === 'ce';
+    const isFrozen = sel.mode === 'ce-frozen';
 
     const applyChunk = (newText) => {
-      replaceSelectedStreamingText(el, sel, rawText, newText);
+      if (isFrozen) {
+        // Frozen mode: the LLM worked on the selection text, but we have no
+        // live range to surgically replace into. Replace the full field content.
+        finalizeCEFrozen(el, newText);
+        return;
+      }
+      if (isCE && newText.indexOf("\n") !== -1) {
+        // Multiline result: build real line-break structure instead of a plain
+        // text node, so the inserted replacement keeps its lines visible.
+        finalizeCEMultiline(el, sel, newText);
+      } else {
+        replaceSelectedStreamingText(el, sel, rawText, newText);
+      }
     };
 
     const finish = (finalText) => {
       hideProcessingIndicator();
       currentRequestId = null;
-      cleanedSelection.delete(el);
+      // Apply the final chunk FIRST (uses the in-place state with its valid
+      // before/after boundaries), *then* close out the state. Reversing this
+      // order makes the final apply re-splice with stale original indices and
+      // eats characters after the selection when the result is shorter.
       applyChunk(finalText || accumulated);
+      cleanedSelection.delete(el);
       showUndoToast();
       activeInputElement = el;
       lastProcessedElement = null;
@@ -926,7 +960,10 @@
       onError: (err) => {
         hideProcessingIndicator();
         currentRequestId = null;
-        cleanedSelection.delete(el);
+        {
+          const state = cleanedSelection.get(el);
+          if (state) state.completed = true;
+        }
         lastUndoState = null;
         showErrorNotification(err.message);
       },
@@ -935,6 +972,7 @@
         currentRequestId = null;
         if (accumulated.trim().length > 0) {
           applyChunk(accumulated);
+          cleanedSelection.delete(el);
           showUndoToast();
         } else {
           cleanedSelection.delete(el);
@@ -981,7 +1019,9 @@
   }
 
   // Context menu action: selection when present, otherwise the full field text.
-  function handleContextMenuProcess(textAction, contextText) {
+  // `selectionInfo` (captured by the background at click time) is trusted over
+  // live selection reads, which the context menu may have already clamped.
+  function handleContextMenuProcess(textAction, contextText, selectionInfo) {
     return new Promise((resolve, reject) => {
       let el = document.activeElement;
       const isUsable = (node) => node && isTextInput(node);
@@ -993,9 +1033,75 @@
         return;
       }
 
+      // Prefer the frozen background positions for INPUT/TEXTAREA: the live
+      // selection may already be clamped by the context menu having opened.
+      // The frozen text must still match the current field content, otherwise
+      // the user edited the field in between and we fall back to live data.
+      if (
+        selectionInfo &&
+        selectionInfo.kind === "range" &&
+        (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') &&
+        typeof selectionInfo.selStart === "number" &&
+        typeof selectionInfo.selEnd === "number" &&
+        selectionInfo.selEnd > selectionInfo.selStart &&
+        selectionInfo.selStart <= el.value.length &&
+        el.value.substring(selectionInfo.selStart, selectionInfo.selEnd) ===
+          (selectionInfo.selectionText || "")
+      ) {
+        const sel = {
+          mode: 'range',
+          start: selectionInfo.selStart,
+          end: selectionInfo.selEnd,
+          text: selectionInfo.selectionText || "",
+          posBefore: true
+        };
+        startSelectionReplacement(textAction, el, sel, contextText);
+        resolve();
+        return;
+      }
+
       const liveSel = getElementSelection(el);
       if (liveSel && liveSel.text && liveSel.text.trim()) {
         startSelectionReplacement(textAction, el, liveSel, contextText);
+        resolve();
+        return;
+      }
+
+      // Frozen DOM selection (contenteditable) without a live match: use it as
+      // the source text, applied via the dom mode.
+      if (selectionInfo && selectionInfo.kind === "dom" && el.isContentEditable &&
+          selectionInfo.selectionText && selectionInfo.selectionText.trim()) {
+        const selection = window.getSelection();
+        let range = null;
+        if (selection && selection.rangeCount > 0) {
+          const r = selection.getRangeAt(0);
+          if (!r.collapsed && el.contains(r.commonAncestorContainer)) {
+            range = r.cloneRange();
+          }
+        }
+        if (range) {
+          // Live range available — replace only the selection.
+          const sel = {
+            mode: 'ce',
+            range,
+            text: selectionInfo.selectionText,
+            posBefore: true
+          };
+          startSelectionReplacement(textAction, el, sel, contextText);
+        } else {
+          // Context menu destroyed the live selection. We know from the
+          // background that there *was* selected text, so process only that
+          // text via the LLM and then replace the full field content with
+          // the single replacement result. There is no safe way to surgically
+          // splice without a range, so this is the well-defined behavior.
+          const sel = {
+            mode: 'ce-frozen',
+            range: null,
+            text: selectionInfo.selectionText,
+            posBefore: true
+          };
+          startSelectionReplacement(textAction, el, sel, contextText);
+        }
         resolve();
         return;
       }
@@ -1018,21 +1124,39 @@
     if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
       // After the first write we track before/after ourselves, so streaming
       // chunks replace only our generated text, regardless of cursor changes.
+      // `state.completed` prevents a stale entry from hijacking a *new* action.
       if (cleanedSelection.has(el)) {
         const state = cleanedSelection.get(el);
-        el.value = state.before + newText + state.after;
-        const cursor = state.before.length + newText.length;
-        el.setSelectionRange(cursor, cursor);
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        return;
+        if (state && !state.completed && state.before !== undefined) {
+          el.value = state.before + newText + state.after;
+          const cursor = state.before.length + newText.length;
+          el.setSelectionRange(cursor, cursor);
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          return;
+        }
+        cleanedSelection.delete(el);
       }
 
       // First write: capture before/after from the freshly captured selection.
       const currentValue = el.value;
       let before, after;
       if (sel && sel.mode === 'range') {
-        before = currentValue.substring(0, sel.start);
-        after = currentValue.substring(sel.end);
+        // Only splice on the frozen indices when the original selected text is
+        // still present at exactly that spot. If the user (or a stale state)
+        // shifted the content since capture, silently splicing would truncate
+        // surrounding characters — safer to fall back to the rawText match.
+        const stillThere = currentValue.substring(sel.start, sel.end) === rawText;
+        if (stillThere || !rawText) {
+          before = currentValue.substring(0, sel.start);
+          after = currentValue.substring(sel.end);
+        } else if (rawText && currentValue.includes(rawText)) {
+          const idx = currentValue.indexOf(rawText);
+          before = currentValue.substring(0, idx);
+          after = currentValue.substring(idx + rawText.length);
+        } else {
+          before = currentValue;
+          after = '';
+        }
       } else if (rawText && currentValue.includes(rawText)) {
         const idx = currentValue.indexOf(rawText);
         before = currentValue.substring(0, idx);
@@ -1042,7 +1166,7 @@
         before = currentValue;
         after = '';
       }
-      cleanedSelection.set(el, { before, after });
+      cleanedSelection.set(el, { before, after, completed: false });
       el.value = before + newText + after;
       const cursor = before.length + newText.length;
       el.setSelectionRange(cursor, cursor);
@@ -1068,10 +1192,111 @@
         } catch (e) {
           el.appendChild(node);
         }
-        cleanedSelection.set(el, { range, node });
+        // Persist only for the contenteditable node-update path. The
+        // INPUT/TEXTAREA before/after path has its own completed flag so a
+        // follow-up action on this element cannot inherit stale boundaries.
+        cleanedSelection.set(el, { range, node, completed: false });
       }
       el.dispatchEvent(new Event('input', { bubbles: true }));
     }
+  }
+
+  // ContentEditable: replace the range with multi-line content, splitting on
+  // newlines and using <br> between segments so lines stay visible in
+  // rich-text composers that ignore "\n" in plain text nodes.
+  function finalizeCEMultiline(el, sel, newText) {
+    const range = sel && sel.range ? sel.range : null;
+    if (!range) {
+      // No usable range — fall back to in-place text node update if one exists.
+      const state = cleanedSelection.get(el);
+      if (state && state.node && el.contains(state.node)) {
+        state.node.textContent = newText;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      return;
+    }
+
+    // Remove a previously inserted streaming node if we already wrote one.
+    const prior = cleanedSelection.get(el);
+    if (prior && prior.node && el.contains(prior.node)) {
+      try {
+        prior.node.parentNode && prior.node.parentNode.removeChild(prior.node);
+      } catch (e) { /* ignore */ }
+    }
+
+    // Build a fragment: text lines separated by <br> elements.
+    const fragment = document.createDocumentFragment();
+    const lines = String(newText).split("\n");
+    lines.forEach((line, index) => {
+      if (index > 0) {
+        fragment.appendChild(document.createElement('br'));
+      }
+      // Even empty lines need a node so consecutive <br> render correctly.
+      if (line.length > 0) {
+        fragment.appendChild(document.createTextNode(line));
+      } else {
+        fragment.appendChild(document.createTextNode(''));
+      }
+    });
+
+    try {
+      range.deleteContents();
+      range.insertNode(fragment);
+      range.collapse(false);
+    } catch (e) {
+      el.appendChild(fragment);
+    }
+
+    try {
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      const after = document.createRange();
+      after.selectNodeContents(el);
+      after.collapse(false);
+      selection.addRange(after);
+    } catch (e) { /* ignore */ }
+
+    cleanedSelection.set(el, { completed: true });
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  // Frozen mode: the context menu destroyed the live selection, but the
+  // background already froze the selection text. We replace the entire
+  // contenteditable with a fragment built from newText (with line breaks).
+  function finalizeCEFrozen(el, newText) {
+    // If a previous chunk already created a node for us, remove it so we can
+    // rebuild with the final text.
+    const prior = cleanedSelection.get(el);
+    if (prior && prior.node && el.contains(prior.node)) {
+      try {
+        prior.node.parentNode && prior.node.parentNode.removeChild(prior.node);
+      } catch (e) { /* ignore */ }
+    }
+
+    const fragment = document.createDocumentFragment();
+    const lines = String(newText).split("\n");
+    lines.forEach((line, index) => {
+      if (index > 0) {
+        fragment.appendChild(document.createElement('br'));
+      }
+      if (line.length > 0) {
+        fragment.appendChild(document.createTextNode(line));
+      } else {
+        fragment.appendChild(document.createTextNode(''));
+      }
+    });
+
+    // Replace the entire content. Frozen mode is always a full-field
+    // replacement (there is no live range to surgically splice into).
+    while (el.firstChild) {
+      el.removeChild(el.firstChild);
+    }
+    el.appendChild(fragment);
+
+    cleanedSelection.set(el, { completed: true });
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
   function getElementFullText(element) {
@@ -1775,6 +2000,9 @@
     lastUndoState = {
       element,
       originalText,
+      // For contenteditable, plain text (innerText) cannot restore the markup
+      // — capture innerHTML so undo preserves formatting.
+      originalHTML: element && element.isContentEditable ? element.innerHTML : null,
       selStart,
       selEnd,
       isFullText
@@ -1806,7 +2034,10 @@
 
     if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
       try {
-        const descriptor = Object.getOwnPropertyDescriptor(el.constructor.prototype, 'value');
+        const proto = el.tagName === 'TEXTAREA'
+          ? window.HTMLTextAreaElement.prototype
+          : window.HTMLInputElement.prototype;
+        const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
         if (descriptor && descriptor.set) {
           descriptor.set.call(el, state.originalText);
         } else {
@@ -1826,8 +2057,15 @@
       el.dispatchEvent(new Event('change', { bubbles: true }));
       el.focus();
     } else if (el.isContentEditable) {
-      el.innerText = state.originalText;
+      // Restore the captured HTML so formatting (line breaks, lists, ...)
+      // is preserved instead of collapsing to plain text via innerText.
+      if (state.originalHTML !== null && state.originalHTML !== undefined) {
+        el.innerHTML = state.originalHTML;
+      } else {
+        el.innerText = state.originalText;
+      }
       el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
       el.focus();
     }
 

@@ -59,8 +59,11 @@ async function rebuildContextMenus() {
   const targetLanguage = config.targetLanguage || t("defaultTargetLanguage") || "English";
 
   chrome.contextMenus.removeAll(() => {
-    if (chrome.runtime.lastError) {
-      console.error("removeAll error:", chrome.runtime.lastError);
+    // removeAll throws lastError on first install when nothing exists to
+    // remove. That is expected, so we do not treat it as a hard error here.
+    const removeError = chrome.runtime.lastError;
+    if (removeError && !/cannot find menu item/i.test(removeError.message || "")) {
+      console.warn("[LLM] removeAll error (non-fatal):", removeError);
     }
 
     // Parent menu
@@ -69,8 +72,17 @@ async function rebuildContextMenus() {
       title: t("contextMenuParent"),
       contexts: ["editable", "selection"]
     }, () => {
-      if (chrome.runtime.lastError) {
-        console.error("create parent error:", chrome.runtime.lastError);
+      const createError = chrome.runtime.lastError;
+      if (createError) {
+        // Duplicate-IDs happen when rebuildContextMenus is called twice in
+        // quick succession (for example onStartup + first install). That is
+        // recoverable — just log and continue so the child items still get
+        // created under the existing parent.
+        if (/duplicate id|already exists/i.test(createError.message || "")) {
+          console.warn("[LLM] Context menu already exists, continuing:", createError.message);
+        } else {
+          console.error("[LLM] create parent error:", createError);
+        }
       }
 
       // Built-in actions always present
@@ -80,6 +92,11 @@ async function rebuildContextMenus() {
           parentId: "llm-parent",
           title: action.title,
           contexts: ["editable", "selection"]
+        }, () => {
+          const childError = chrome.runtime.lastError;
+          if (childError && !/duplicate id|already exists/i.test(childError.message || "")) {
+            console.error("[LLM] create builtin action error:", action.id, childError);
+          }
         });
       }
 
@@ -92,6 +109,11 @@ async function rebuildContextMenus() {
             parentId: "llm-parent",
             title: `${emoji} ${action.title}`,
             contexts: ["editable", "selection"]
+          }, () => {
+            const customError = chrome.runtime.lastError;
+            if (customError && !/duplicate id|already exists/i.test(customError.message || "")) {
+              console.error("[LLM] create custom action error:", `custom_${index}`, customError);
+            }
           });
         }
       });
@@ -249,15 +271,37 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (!isBuiltin && !isCustom) return;
 
   let selectedText = info.selectionText || "";
+  let selectionInfo = null;
 
-  // Try to get better formatted text with line breaks via executeScript
+  // Freeze the selection *and its position* at click time. Reading
+  // selectionStart/End later from the content script is unreliable because
+  // opening the context menu can shift focus and clamp the live selection
+  // (which made follow-up replacements hit the wrong range).
   try {
     const results = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
-      func: () => window.getSelection().toString()
+      func: () => {
+        const el = document.activeElement;
+        if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA")) {
+          const start = el.selectionStart;
+          const end = el.selectionEnd;
+          return {
+            kind: "range",
+            selStart: start,
+            selEnd: end,
+            selectionText: (start !== null && end !== null && start < end)
+              ? el.value.substring(start, end)
+              : ""
+          };
+        }
+        return { kind: "dom", selectionText: window.getSelection().toString() };
+      }
     });
     if (results && results[0] && results[0].result) {
-      selectedText = results[0].result;
+      selectionInfo = results[0].result;
+      if (selectionInfo.selectionText) {
+        selectedText = selectionInfo.selectionText;
+      }
     }
   } catch (e) {
     console.warn("Could not execute script to get selection, falling back to selectionText");
@@ -273,7 +317,8 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     chrome.tabs.sendMessage(tab.id, {
       action: "contextMenuProcess",
       textAction: info.menuItemId,
-      text: selectedText
+      text: selectedText,
+      selectionInfo: selectionInfo
     }, (response) => {
       if (chrome.runtime.lastError || !response || !response.success) {
         // Fallback: process directly and inject the result
