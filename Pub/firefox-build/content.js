@@ -595,6 +595,11 @@
   //  STREAMING CORE
   // =====================================================================
 
+  // Track selection-replacement state per element (streaming).
+  // Only valid while a selection action is running; deleted on finish/error/abort
+  // so a later action starts fresh from the current selection.
+  const cleanedSelection = new WeakMap();
+
   function getOrCreatePort() {
     if (streamPort) {
       try {
@@ -708,26 +713,75 @@
   }
 
   // =====================================================================
-  //  ACTION EXECUTION (floating menu, full-text replacement)
+  //  ACTION EXECUTION (floating menu + context menu)
   // =====================================================================
 
-  function executeAction(actionId) {
-    if (!activeInputElement) return;
+  // Returns the non-collapsed selection inside el, or null when nothing
+  // is selected. Shape: {mode:'range',start,end,text,posBefore}
+  //                  or  {mode:'ce',range,text,posBefore}
+  function getElementSelection(el) {
+    if (!el) return null;
 
-    const text = getElementFullText(activeInputElement);
+    if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+      const start = el.selectionStart;
+      const end = el.selectionEnd;
+      if (start === undefined || end === undefined || start === null || start === end) {
+        return null;
+      }
+      return {
+        mode: 'range',
+        start,
+        end,
+        text: el.value.substring(start, end),
+        posBefore: document.activeElement === el
+      };
+    }
+
+    if (el.isContentEditable) {
+      const selection = window.getSelection();
+      if (!selection || selection.rangeCount === 0) return null;
+      const range = selection.getRangeAt(0);
+      if (range.collapsed || !el.contains(range.commonAncestorContainer)) return null;
+      return {
+        mode: 'ce',
+        range: range.cloneRange(),
+        text: range.toString(),
+        posBefore: document.activeElement === el
+      };
+    }
+
+    return null;
+  }
+
+  // Read the selected text for the context-menu flow. Prefers the element's
+  // live selection state (exact for INPUT/TEXTAREA), falls back to the raw
+  // string coming from the background script.
+  function resolveSelectionText(el) {
+    const sel = getElementSelection(el);
+    if (sel && sel.text) return sel.text;
+    const s = (window.getSelection() || '').toString();
+    if (s) return s;
+    return '';
+  }
+
+  // Full-text replacement (streaming)
+  function startFullTextReplacement(textAction, el, fallbackText) {
+    // Clear leftover state from a previous selection run
+    cleanedSelection.delete(el);
+
+    const text = (fallbackText !== undefined && fallbackText !== null && fallbackText !== '')
+      ? fallbackText
+      : getElementFullText(el);
+
     if (!text.trim()) {
       showErrorNotification(t('errorNoText'));
       return;
     }
 
-    // Store element reference before hiding UI
-    lastProcessedElement = activeInputElement;
-    const targetElement = activeInputElement;
-
     hideActionMenu();
 
     // Capture undo state before any modification
-    captureUndoState(targetElement, text, null, null, true);
+    captureUndoState(el, text, null, null, true);
 
     showProcessingIndicator();
 
@@ -737,22 +791,22 @@
     const finish = (finalText) => {
       hideProcessingIndicator();
       currentRequestId = null;
-      replaceFullTextInElement(targetElement, finalText);
+      replaceFullTextInElement(el, finalText);
       showUndoToast();
-      activeInputElement = targetElement;
+      activeInputElement = el;
       lastProcessedElement = null;
       showFloatingIcon();
     };
 
-    const requestId = startActionStream(actionId, text, true, {
+    const requestId = startActionStream(textAction, text, true, {
       onToken: (token) => {
         accumulated += token;
         if (!cleaned && accumulated.trim().length > 0) {
           // Clear the original text as soon as real content arrives
-          replaceFullTextInElement(targetElement, accumulated);
+          replaceFullTextInElement(el, accumulated);
           cleaned = true;
         } else if (cleaned) {
-          replaceFullTextInElement(targetElement, accumulated);
+          replaceFullTextInElement(el, accumulated);
         }
       },
       onDone: (finalText) => {
@@ -762,19 +816,18 @@
         hideProcessingIndicator();
         currentRequestId = null;
         // Restore original text on error
-        replaceFullTextInElement(targetElement, text);
+        replaceFullTextInElement(el, text);
         lastUndoState = null;
         showErrorNotification(err.message);
       },
       onAborted: () => {
         hideProcessingIndicator();
         currentRequestId = null;
-        // Keep what was generated so far if any, else restore original
         if (accumulated.trim().length > 0) {
-          replaceFullTextInElement(targetElement, accumulated);
+          replaceFullTextInElement(el, accumulated);
           showUndoToast();
         } else {
-          replaceFullTextInElement(targetElement, text);
+          replaceFullTextInElement(el, text);
           lastUndoState = null;
         }
         showInfoNotification(t('requestCancelled'));
@@ -785,7 +838,7 @@
       // Streaming not available — legacy fallback via sendMessage
       chrome.runtime.sendMessage({
         action: "processFullText",
-        textAction: actionId,
+        textAction: textAction,
         text: text
       }, (response) => {
         if (chrome.runtime.lastError) {
@@ -795,121 +848,231 @@
         }
       });
     }
+
+    lastProcessedElement = el;
   }
 
-  // Context-menu initiated processing (selection replacement), streaming via port.
-  function handleContextMenuProcess(textAction, text) {
+  // Selection replacement (streaming) — handles both range-based and contenteditable
+  function startSelectionReplacement(textAction, el, sel, rawTextFallback) {
+    // Clear leftover state so this run starts from the current selection
+    cleanedSelection.delete(el);
+
+    const rawText = sel.text || rawTextFallback || '';
+    let streamSourceText = rawText;
+    let originalFullText;
+    let undoSelStart = null;
+    let undoSelEnd = null;
+
+    if (sel.mode === 'range') {
+      originalFullText = el.value || '';
+      undoSelStart = sel.start;
+      undoSelEnd = sel.end;
+      streamSourceText = rawText;
+    } else if (sel.mode === 'ce') {
+      originalFullText = getElementFullText(el);
+      try {
+        el.focus();
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(sel.range);
+      } catch (e) { /* ignore */ }
+      undoSelStart = null;
+      undoSelEnd = null;
+    } else {
+      return;
+    }
+
+    const hasTextToProcess = String(streamSourceText).trim().length > 0;
+    const text = hasTextToProcess
+      ? streamSourceText
+      : (originalFullText || '');
+
+    if (!String(text).trim()) {
+      showErrorNotification(t('errorNoText'));
+      return;
+    }
+
+    hideActionMenu();
+    captureUndoState(el, originalFullText, undoSelStart, undoSelEnd, false);
+    showProcessingIndicator();
+
+    activeInputElement = el;
+
+    let accumulated = "";
+
+    const applyChunk = (newText) => {
+      replaceSelectedStreamingText(el, sel, rawText, newText);
+    };
+
+    const finish = (finalText) => {
+      hideProcessingIndicator();
+      currentRequestId = null;
+      cleanedSelection.delete(el);
+      applyChunk(finalText || accumulated);
+      showUndoToast();
+      activeInputElement = el;
+      lastProcessedElement = null;
+      showFloatingIcon();
+    };
+
+    const requestId = startActionStream(textAction, streamSourceText, false, {
+      onToken: (token) => {
+        accumulated += token;
+        applyChunk(accumulated);
+      },
+      onDone: (finalText) => {
+        finish(finalText);
+      },
+      onError: (err) => {
+        hideProcessingIndicator();
+        currentRequestId = null;
+        cleanedSelection.delete(el);
+        lastUndoState = null;
+        showErrorNotification(err.message);
+      },
+      onAborted: () => {
+        hideProcessingIndicator();
+        currentRequestId = null;
+        if (accumulated.trim().length > 0) {
+          applyChunk(accumulated);
+          showUndoToast();
+        } else {
+          cleanedSelection.delete(el);
+          lastUndoState = null;
+        }
+        showInfoNotification(t('requestCancelled'));
+      }
+    });
+
+    if (requestId === null) {
+      // Streaming not available — legacy fallback via sendMessage
+      chrome.runtime.sendMessage({
+        action: "processSelection",
+        textAction: textAction,
+        text: text
+      }, (response) => {
+        if (chrome.runtime.lastError) {
+          hideProcessingIndicator();
+          currentRequestId = null;
+          cleanedSelection.delete(el);
+          showErrorNotification(chrome.runtime.lastError.message);
+        }
+      });
+    }
+
+    lastProcessedElement = el;
+  }
+
+
+  // Floating icon action: use the selection when one exists, otherwise
+  // process the entire field content.
+  function executeAction(actionId) {
+    if (!activeInputElement) return;
+
+    const el = activeInputElement;
+    const sel = getElementSelection(el);
+
+    if (sel && sel.text && sel.text.trim()) {
+      startSelectionReplacement(actionId, el, sel, sel.text);
+      return;
+    }
+
+    startFullTextReplacement(actionId, el);
+  }
+
+  // Context menu action: selection when present, otherwise the full field text.
+  function handleContextMenuProcess(textAction, contextText) {
     return new Promise((resolve, reject) => {
-      const activeElement = document.activeElement;
-      if (!activeElement || !isTextInput(activeElement)) {
+      let el = document.activeElement;
+      const isUsable = (node) => node && isTextInput(node);
+      if (!isUsable(el)) {
+        el = activeInputElement;
+      }
+      if (!isUsable(el)) {
         reject(new Error("No suitable active element"));
         return;
       }
 
-      // Capture selection info for undo + replacement
-      let selStart = null, selEnd = null;
-      if (activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA') {
-        selStart = activeElement.selectionStart;
-        selEnd = activeElement.selectionEnd;
+      const liveSel = getElementSelection(el);
+      if (liveSel && liveSel.text && liveSel.text.trim()) {
+        startSelectionReplacement(textAction, el, liveSel, contextText);
+        resolve();
+        return;
       }
 
-      const originalFullText = getElementFullText(activeElement);
-      captureUndoState(
-        activeElement,
-        selStart !== null
-          ? originalFullText.substring(0, selStart) + text + originalFullText.substring(selEnd)
-          : originalFullText,
-        selStart, selEnd, false
-      );
+      const fullText = getElementFullText(el) || '';
+      if (!fullText.trim()) {
+        reject(new Error("No suitable text found"));
+        return;
+      }
 
-      let accumulated = "";
-      let cleaned = false;
-      activeInputElement = activeElement;
-      showProcessingIndicator();
-
-      const applyChunk = (newText) => {
-        replaceSelectedStreamingText(activeElement, selStart, selEnd, text, newText);
-      };
-
-      startActionStream(textAction, text, false, {
-        onToken: (token) => {
-          accumulated += token;
-          if (!cleaned && accumulated.trim().length > 0) {
-            applyChunk(accumulated);
-            cleaned = true;
-          } else if (cleaned) {
-            applyChunk(accumulated);
-          }
-        },
-        onDone: (finalText) => {
-          hideProcessingIndicator();
-          currentRequestId = null;
-          const final = finalText || accumulated;
-          applyChunk(final);
-          showUndoToast();
-          resolve();
-        },
-        onError: (err) => {
-          hideProcessingIndicator();
-          currentRequestId = null;
-          lastUndoState = null;
-          showErrorNotification(err.message);
-          resolve(); // resolve anyway; background already handled fallback separately
-        },
-        onAborted: () => {
-          hideProcessingIndicator();
-          currentRequestId = null;
-          if (accumulated.trim().length > 0) {
-            applyChunk(accumulated);
-            showUndoToast();
-          } else {
-            lastUndoState = null;
-          }
-          showInfoNotification(t('requestCancelled'));
-          resolve();
-        }
-      }) || reject(new Error("Streaming not available"));
+      startFullTextReplacement(textAction, el, fullText);
+      resolve();
     });
   }
 
-  // For selection-mode streaming: replace the original selected range with current accumulated text.
-  function replaceSelectedStreamingText(el, selStart, selEnd, originalSelection, newText) {
+  // For selection-mode streaming: replace the captured selected range with the
+  // current accumulated text. `sel` is the selection descriptor captured when
+  // the action started; `rawText` is the original selected string (fallback).
+  function replaceSelectedStreamingText(el, sel, rawText, newText) {
     if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
-      // Current value may already contain partially replaced text. We track via data attribute.
-      const fullOriginal = originalSelection;
-      const currentValue = el.value;
-
+      // After the first write we track before/after ourselves, so streaming
+      // chunks replace only our generated text, regardless of cursor changes.
       if (cleanedSelection.has(el)) {
-        // The element already contains streaming text; we stored the original full value
         const state = cleanedSelection.get(el);
-        const before = state.before;
-        const after = state.after;
-        el.value = before + newText + after;
-        const cursor = before.length + newText.length;
+        el.value = state.before + newText + state.after;
+        const cursor = state.before.length + newText.length;
         el.setSelectionRange(cursor, cursor);
         el.dispatchEvent(new Event('input', { bubbles: true }));
         return;
       }
 
-      // First write: capture before/after from current DOM values
-      const start = selStart !== null ? selStart : 0;
-      const end = selEnd !== null ? selEnd : start;
-      const before = currentValue.substring(0, start);
-      const after = currentValue.substring(end);
+      // First write: capture before/after from the freshly captured selection.
+      const currentValue = el.value;
+      let before, after;
+      if (sel && sel.mode === 'range') {
+        before = currentValue.substring(0, sel.start);
+        after = currentValue.substring(sel.end);
+      } else if (rawText && currentValue.includes(rawText)) {
+        const idx = currentValue.indexOf(rawText);
+        before = currentValue.substring(0, idx);
+        after = currentValue.substring(idx + rawText.length);
+      } else {
+        // Nothing identifiable selected — append at cursor/end as a safe fallback
+        before = currentValue;
+        after = '';
+      }
       cleanedSelection.set(el, { before, after });
       el.value = before + newText + after;
       const cursor = before.length + newText.length;
       el.setSelectionRange(cursor, cursor);
       el.dispatchEvent(new Event('input', { bubbles: true }));
     } else if (el.isContentEditable) {
-      // ContentEditable streaming: replace entire content (simpler, robust)
-      el.innerText = newText;
+      let state = cleanedSelection.get(el);
+      if (state && state.node && el.contains(state.node)) {
+        // Subsequent chunk: update the already inserted node in place.
+        state.node.textContent = newText;
+      } else {
+        // First write: delete the captured range and insert a single text node
+        // that later chunks will update. Keeps the surrounding content intact.
+        const range = state && state.range ? state.range : (sel && sel.range);
+        if (!range) return;
+        try {
+          range.deleteContents();
+        } catch (e) { /* range may be detached */ }
+        const node = document.createTextNode(newText);
+        try {
+          range.insertNode(node);
+          range.setStartAfter(node);
+          range.collapse(true);
+        } catch (e) {
+          el.appendChild(node);
+        }
+        cleanedSelection.set(el, { range, node });
+      }
       el.dispatchEvent(new Event('input', { bubbles: true }));
     }
   }
-
-  // Track selection-stream state per element
-  const cleanedSelection = new WeakMap();
 
   function getElementFullText(element) {
     if (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA') {

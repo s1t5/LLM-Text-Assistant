@@ -163,6 +163,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true; // Keep channel open for async response
   }
 
+  if (request.action === "processSelection") {
+    if (!sender.tab) {
+      console.error("[LLM] sender.tab is undefined!");
+      sendResponse({ success: false, error: "sender.tab is undefined" });
+      return;
+    }
+    processTextNonStreaming(request.textAction, request.text, sender.tab, false)
+      .then(() => sendResponse({ success: true }))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
   if (request.action === "processFreePrompt") {
     if (!sender.tab) {
       console.error("[LLM] sender.tab is undefined!");
@@ -251,10 +263,8 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     console.warn("Could not execute script to get selection, falling back to selectionText");
   }
 
-  if (!selectedText.trim()) {
-    console.warn("No text selected");
-    return;
-  }
+  // Empty selection is allowed: the content script falls back to the
+  // element's full text in that case.
 
   // Context-menu path: streaming not possible without the content-script port,
   // so use a sendMessage-based streaming bridge: content.js opens the port.
