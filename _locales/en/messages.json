@@ -259,6 +259,42 @@
     "message": "Show in context menu",
     "description": "Show in context menu toggle label"
   },
+  "optionsShortcutForAction": {
+    "message": "Shortcut",
+    "description": "Shortcut label for custom action"
+  },
+  "optionsShortcuts": {
+    "message": "⌨️ Shortcuts",
+    "description": "Shortcuts card heading"
+  },
+  "optionsShortcutsDesc": {
+    "message": "Assign keyboard shortcuts to the actions. Click in a field and press the desired combination. Leave empty = no shortcut.",
+    "description": "Shortcuts description"
+  },
+  "shortcutForTranslate": {
+    "message": "Translate",
+    "description": "Shortcut label for translate action"
+  },
+  "shortcutForExpand": {
+    "message": "Expand",
+    "description": "Shortcut label for expand action"
+  },
+  "shortcutForSummarize": {
+    "message": "Summarize",
+    "description": "Shortcut label for summarize action"
+  },
+  "shortcutForGrammar": {
+    "message": "Spelling & grammar",
+    "description": "Shortcut label for grammar action"
+  },
+  "shortcutForFreePrompt": {
+    "message": "Free prompt",
+    "description": "Shortcut label for free prompt action"
+  },
+  "shortcutPlaceholder": {
+    "message": "Click and press key combination...",
+    "description": "Placeholder text for shortcut capture fields"
+  },
   "optionsFreePrompt": {
     "message": "💬 Free prompt (chat mode)",
     "description": "Free prompt card heading"

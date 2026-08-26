@@ -48,6 +48,30 @@ print('Locales konsistent ✓')
 "
 ```
 
+## Tastenkürzel (Shortcuts)
+
+Seit v1.4.0 können Aktionen Tastenkürzel zugeordnet werden.
+
+### Datenmodell
+
+- **`builtinShortcuts`** (Storage-Key): Objekt mit den Built-in-IDs als Key (`translate`, `expand`, `summarize`, `grammar`) und dem Shortcut-String als Wert.
+- **`freePromptShortcut`** (Storage-Key): String für den Freier-Prompt-Shortcut.
+- **`customActions[N].shortcut`**: String, direkt am Custom-Action-Objekt.
+
+### Format
+
+Kanonische Form: `[Ctrl+][Alt+][Shift+][Meta+]<Key>`
+
+- Modifier in fester Reihenfolge: `Ctrl`, `Alt`, `Shift`, `Meta`.
+- `<Key>`: Großbuchstabe (`A`–`Z`), Ziffer (`0`–`9`), `F1`–`F12`, `Enter`, `Space`, `Escape`, `Backspace`, `Delete`, `Tab`, `ArrowUp` usw.
+- macOS-`Cmd` wird intern als `Meta` gespeichert.
+
+### Verhalten
+
+- Der `keydown`-Listener in `content.js` läuft in der **Capture-Phase** und ruft bei einem Treffer `preventDefault()` + `stopPropagation()` auf (Extension-Kürzel gewinnt immer).
+- Shortcuts werden **nur ausgelöst**, wenn ein Textfeld (`INPUT`, `TEXTAREA`, `contenteditable`) fokussiert ist.
+- Das schwebende Menü zeigt konfigurierte Kürzel rechtsbündig neben dem Aktionsnamen an.
+
 ## Veröffentlichen (Chrome & Firefox)
 
 Build-Artefakte liegen in `Pub/`. Version in **beiden** Manifesten synchron erhöhen.

@@ -40,6 +40,114 @@
   let builtinActions = [];
   let customActions = [];
   let freePromptEnabled = true;
+  let builtinShortcuts = {};
+  let freePromptShortcut = "";
+
+  // --- Shortcut helpers ---
+
+  function serializeKeyboardEvent(e) {
+    const parts = [];
+    if (e.ctrlKey) parts.push('Ctrl');
+    if (e.altKey) parts.push('Alt');
+    if (e.shiftKey) parts.push('Shift');
+    if (e.metaKey) parts.push('Meta');
+
+    let key = e.key;
+    const keyMap = {
+      ' ': 'Space',
+      'Control': 'Ctrl',
+      'Alt': 'Alt',
+      'Shift': 'Shift',
+      'Meta': 'Meta',
+      'ArrowUp': 'ArrowUp',
+      'ArrowDown': 'ArrowDown',
+      'ArrowLeft': 'ArrowLeft',
+      'ArrowRight': 'ArrowRight',
+      'Enter': 'Enter',
+      'Escape': 'Escape',
+      'Backspace': 'Backspace',
+      'Delete': 'Delete',
+      'Tab': 'Tab',
+      'Home': 'Home',
+      'End': 'End',
+      'PageUp': 'PageUp',
+      'PageDown': 'PageDown'
+    };
+
+    if (key === 'Control' || key === 'Alt' || key === 'Shift' || key === 'Meta') {
+      return null;
+    }
+
+    if (keyMap[key] !== undefined) {
+      key = keyMap[key];
+    } else if (key.length === 1) {
+      key = key.toUpperCase();
+    }
+
+    parts.push(key);
+    return parts.join('+');
+  }
+
+  function parseShortcut(str) {
+    if (!str || !str.trim()) return null;
+    const parts = str.split('+');
+    const result = { ctrl: false, alt: false, shift: false, meta: false, key: '' };
+    for (const part of parts) {
+      const p = part.trim();
+      const lower = p.toLowerCase();
+      if (lower === 'ctrl') result.ctrl = true;
+      else if (lower === 'alt') result.alt = true;
+      else if (lower === 'shift') result.shift = true;
+      else if (lower === 'meta' || lower === 'cmd') result.meta = true;
+      else result.key = p;
+    }
+    return result.key ? result : null;
+  }
+
+  function findActionForShortcut(shortcutStr) {
+    if (!shortcutStr) return null;
+
+    // Built-in actions
+    for (const [actionId, sc] of Object.entries(builtinShortcuts)) {
+      if (sc && sc.trim() === shortcutStr) return actionId;
+    }
+
+    // Custom actions
+    for (let i = 0; i < customActions.length; i++) {
+      const sc = customActions[i].shortcut;
+      if (sc && sc.trim() === shortcutStr) return `custom_${i}`;
+    }
+
+    // Free prompt
+    if (freePromptShortcut && freePromptShortcut.trim() === shortcutStr) {
+      return 'freePrompt';
+    }
+
+    return null;
+  }
+
+  function handleShortcutKeydown(e) {
+    const el = document.activeElement;
+    if (!isTextInput(el)) return;
+
+    const shortcutStr = serializeKeyboardEvent(e);
+    if (!shortcutStr) return;
+
+    const actionId = findActionForShortcut(shortcutStr);
+    if (!actionId) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    // Set the active element so executeAction / openFreePromptChat works correctly
+    activeInputElement = el;
+
+    if (actionId === 'freePrompt') {
+      openFreePromptChat();
+    } else {
+      executeAction(actionId);
+    }
+  }
 
   // --- Load actions from background ---
 
@@ -49,12 +157,18 @@
         console.warn("[LLM Content] Could not load actions:", chrome.runtime.lastError.message);
         return;
       }
-      if (response && response.success && response.actions) {
+        if (response && response.success && response.actions) {
         if (response.actions.builtin) {
           builtinActions = response.actions.builtin;
         }
         customActions = Array.isArray(response.actions.custom) ? response.actions.custom : [];
         freePromptEnabled = response.actions.freePromptEnabled !== false;
+        builtinShortcuts = response.actions.builtinShortcuts && typeof response.actions.builtinShortcuts === 'object'
+          ? response.actions.builtinShortcuts
+          : {};
+        freePromptShortcut = typeof response.actions.freePromptShortcut === 'string'
+          ? response.actions.freePromptShortcut
+          : "";
 
         // Rebuild action menu if it exists
         if (actionMenu) {
@@ -107,10 +221,13 @@
 
     // Listen for storage changes to reload actions
     chrome.storage.onChanged.addListener((changes, namespace) => {
-      if (namespace === 'sync' && (changes.customActions || changes.freePromptEnabled || changes.targetLanguage)) {
+      if (namespace === 'sync' && (changes.customActions || changes.freePromptEnabled || changes.targetLanguage || changes.builtinShortcuts || changes.freePromptShortcut || changes.customActions)) {
         loadActions();
       }
     });
+
+    // Global shortcut listener (capture phase so we win over websites)
+    document.addEventListener('keydown', handleShortcutKeydown, true);
   }
 
   function attachListeners(root) {
@@ -456,7 +573,8 @@
 
     // Built-in action items
     for (const action of builtinActions) {
-      actionMenu.appendChild(createActionMenuItem(action.id, action.title));
+      const shortcut = builtinShortcuts[action.id] || '';
+      actionMenu.appendChild(createActionMenuItem(action.id, action.title, shortcut));
     }
 
     // Custom action items
@@ -485,7 +603,8 @@
       customActions.forEach((action, index) => {
         const actionId = `custom_${index}`;
         const emoji = action.emoji || '⚡';
-        actionMenu.appendChild(createActionMenuItem(actionId, `${emoji} ${action.title}`, actionId));
+        const shortcut = action.shortcut || '';
+        actionMenu.appendChild(createActionMenuItem(actionId, `${emoji} ${action.title}`, shortcut));
       });
     }
 
@@ -502,7 +621,22 @@
       const freePromptItem = document.createElement('div');
       freePromptItem.className = 'llm-action-item';
       freePromptItem.dataset.action = 'freePrompt';
-      freePromptItem.textContent = t('menuFreePrompt');
+
+      const freePromptLabel = document.createElement('span');
+      freePromptLabel.textContent = t('menuFreePrompt');
+      freePromptItem.appendChild(freePromptLabel);
+
+      if (freePromptShortcut) {
+        const shortcutSpan = document.createElement('span');
+        shortcutSpan.textContent = freePromptShortcut;
+        Object.assign(shortcutSpan.style, {
+          float: 'right',
+          fontSize: '11px',
+          color: '#888',
+          marginLeft: '12px'
+        });
+        freePromptItem.appendChild(shortcutSpan);
+      }
 
       Object.assign(freePromptItem.style, {
         padding: '8px 10px',
@@ -514,7 +648,10 @@
         overflow: 'hidden',
         textOverflow: 'ellipsis',
         color: '#2563a8',
-        fontWeight: '500'
+        fontWeight: '500',
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center'
       });
 
       freePromptItem.addEventListener('mouseenter', () => {
@@ -556,11 +693,26 @@
     document.body.appendChild(actionMenu);
   }
 
-  function createActionMenuItem(actionId, displayTitle) {
+  function createActionMenuItem(actionId, displayTitle, shortcut) {
     const item = document.createElement('div');
     item.className = 'llm-action-item';
     item.dataset.action = actionId;
-    item.textContent = displayTitle;
+
+    const labelSpan = document.createElement('span');
+    labelSpan.textContent = displayTitle;
+    item.appendChild(labelSpan);
+
+    if (shortcut) {
+      const shortcutSpan = document.createElement('span');
+      shortcutSpan.textContent = shortcut;
+      Object.assign(shortcutSpan.style, {
+        fontSize: '11px',
+        color: '#888',
+        marginLeft: '12px',
+        flexShrink: '0'
+      });
+      item.appendChild(shortcutSpan);
+    }
 
     Object.assign(item.style, {
       padding: '8px 10px',
@@ -571,7 +723,10 @@
       whiteSpace: 'nowrap',
       overflow: 'hidden',
       textOverflow: 'ellipsis',
-      color: '#2c3e50'
+      color: '#2c3e50',
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center'
     });
 
     item.addEventListener('mouseenter', () => {

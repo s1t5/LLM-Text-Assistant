@@ -17,14 +17,16 @@ function buildDefaultConfig() {
     promptSummarize: t("defaultPromptSummarize"),
     promptGrammar: t("defaultPromptGrammar"),
     customActions: [],
-    freePromptEnabled: true
+    freePromptEnabled: true,
+    builtinShortcuts: {},
+    freePromptShortcut: ""
   };
 }
 
 const DEFAULT_KEYS = [
   "apiUrl", "apiKey", "model", "temperature", "timeoutSeconds", "targetLanguage",
   "promptTranslate", "promptExpand", "promptSummarize", "promptGrammar",
-  "customActions", "freePromptEnabled"
+  "customActions", "freePromptEnabled", "builtinShortcuts", "freePromptShortcut"
 ];
 
 // --- Built-in action definitions (titles resolved at runtime) ---
@@ -742,7 +744,9 @@ async function loadActionsForContent() {
   return {
     builtin: getBuiltinActions(targetLanguage).map(a => ({ id: a.id, title: a.title })),
     custom: customActions.filter(a => a.title && a.title.trim()),
-    freePromptEnabled: freePromptEnabled
+    freePromptEnabled: freePromptEnabled,
+    builtinShortcuts: config.builtinShortcuts && typeof config.builtinShortcuts === 'object' ? config.builtinShortcuts : {},
+    freePromptShortcut: typeof config.freePromptShortcut === 'string' ? config.freePromptShortcut : ""
   };
 }
 

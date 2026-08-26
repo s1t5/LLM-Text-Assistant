@@ -224,6 +224,43 @@
       margin-bottom: 12px;
     }
 
+    /* Shortcut capture field */
+    .shortcut-capture {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-family: var(--font);
+      font-size: 0.9rem;
+      color: var(--text);
+      background: var(--card);
+      cursor: pointer;
+      transition: border-color 0.2s, box-shadow 0.2s;
+      text-align: center;
+    }
+
+    .shortcut-capture:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(52,152,219,0.15);
+    }
+
+    .shortcut-capture.capturing {
+      border-color: var(--accent);
+      background: #e8f4fd;
+    }
+
+    .shortcut-capture::placeholder {
+      color: var(--label);
+      opacity: 0.7;
+    }
+
+    .shortcut-hint {
+      font-size: 0.82rem;
+      color: var(--label);
+      margin-top: 4px;
+    }
+
     .add-action-btn {
       display: flex;
       align-items: center;
@@ -387,6 +424,35 @@
         <!-- Dynamically filled -->
       </div>
       <button id="addActionBtn" class="add-action-btn" data-i18n="optionsAddAction">＋ Neue Aktion hinzufügen</button>
+    </div>
+
+    <!-- Shortcuts Card -->
+    <div class="card">
+      <h2 data-i18n="optionsShortcuts">⌨️ Tastenkürzel</h2>
+      <p style="margin:0 0 16px;font-size:0.88rem;color:var(--label);" data-i18n="optionsShortcutsDesc">
+        Weise den Aktionen Tastenkürzel zu. Klicke in ein Feld und drücke die gewünschte Kombination. Leer lassen = kein Kürzel.
+      </p>
+
+      <div class="field">
+        <label for="shortcutTranslate" data-i18n="shortcutForTranslate">Übersetzen</label>
+        <input type="text" id="shortcutTranslate" class="shortcut-capture" readonly data-i18n-placeholder="shortcutPlaceholder" placeholder="Klicken und Tastenkombination drücken...">
+      </div>
+      <div class="field">
+        <label for="shortcutExpand" data-i18n="shortcutForExpand">Ausformulieren</label>
+        <input type="text" id="shortcutExpand" class="shortcut-capture" readonly data-i18n-placeholder="shortcutPlaceholder" placeholder="Klicken und Tastenkombination drücken...">
+      </div>
+      <div class="field">
+        <label for="shortcutSummarize" data-i18n="shortcutForSummarize">Zusammenfassen</label>
+        <input type="text" id="shortcutSummarize" class="shortcut-capture" readonly data-i18n-placeholder="shortcutPlaceholder" placeholder="Klicken und Tastenkombination drücken...">
+      </div>
+      <div class="field">
+        <label for="shortcutGrammar" data-i18n="shortcutForGrammar">Rechtschreibung &amp; Grammatik</label>
+        <input type="text" id="shortcutGrammar" class="shortcut-capture" readonly data-i18n-placeholder="shortcutPlaceholder" placeholder="Klicken und Tastenkombination drücken...">
+      </div>
+      <div class="field">
+        <label for="shortcutFreePrompt" data-i18n="shortcutForFreePrompt">Freier Prompt</label>
+        <input type="text" id="shortcutFreePrompt" class="shortcut-capture" readonly data-i18n-placeholder="shortcutPlaceholder" placeholder="Klicken und Tastenkombination drücken...">
+      </div>
     </div>
 
     <!-- Free Prompt Card -->
