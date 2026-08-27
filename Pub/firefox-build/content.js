@@ -1747,11 +1747,28 @@
       boxShadow: '0 1px 2px rgba(0,0,0,0.05)'
     });
 
-    // Render simple markdown bold
-    let html = content
-      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-      .replace(/\n/g, '<br>');
-    msgDiv.innerHTML = html;
+    // Render simple markdown bold with plain DOM APIs instead of innerHTML.
+    // Avoids any interpretation of LLM-generated text as HTML (CSP/XSS-safe).
+    renderMarkdownText(msgDiv, content);
+  }
+
+  // Renders "text with **bold** and line breaks" using DOM APIs only.
+  function renderMarkdownText(container, text) {
+    container.textContent = '';
+    const lines = text.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      if (i > 0) container.appendChild(document.createElement('br'));
+      const parts = lines[i].split(/\*\*(.+?)\*\*/g);
+      for (let j = 0; j < parts.length; j++) {
+        if (j % 2 === 1) {
+          const strong = document.createElement('strong');
+          strong.textContent = parts[j];
+          container.appendChild(strong);
+        } else if (parts[j]) {
+          container.appendChild(document.createTextNode(parts[j]));
+        }
+      }
+    }
   }
 
   function setSendButtonStopMode(stopMode) {
@@ -2212,13 +2229,9 @@
       el.dispatchEvent(new Event('change', { bubbles: true }));
       el.focus();
     } else if (el.isContentEditable) {
-      // Restore the captured HTML so formatting (line breaks, lists, ...)
-      // is preserved instead of collapsing to plain text via innerText.
-      if (state.originalHTML !== null && state.originalHTML !== undefined) {
-        el.innerHTML = state.originalHTML;
-      } else {
-        el.innerText = state.originalText;
-      }
+      // Plain text: assigning innerText rebuilds the element's text content
+      // without ever parsing the value as HTML (unlike innerHTML).
+      el.innerText = state.originalText;
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
       el.focus();

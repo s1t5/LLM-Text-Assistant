@@ -1,0 +1,372 @@
+{
+  "extensionName": {
+    "message": "LLM Text Assistant",
+    "description": "Name of the extension"
+  },
+  "extensionDescription": {
+    "message": "Process selected text in input fields via a chat-completions LLM directly in the browser.",
+    "description": "Description of the extension"
+  },
+  "contextMenuParent": {
+    "message": "LLM Text Assistant",
+    "description": "Parent context menu title"
+  },
+  "actionTranslate": {
+    "message": "🌐 Translate into $TARGET_LANGUAGE$",
+    "description": "Translate context menu item",
+    "placeholders": {
+      "target_language": {
+        "content": "$1",
+        "example": "German"
+      }
+    }
+  },
+  "actionExpand": {
+    "message": "✍️ Expand text",
+    "description": "Expand context menu item"
+  },
+  "actionSummarize": {
+    "message": "📋 Summarize",
+    "description": "Summarize context menu item"
+  },
+  "actionGrammar": {
+    "message": "✅ Spelling & grammar",
+    "description": "Grammar context menu item"
+  },
+  "menuHeader": {
+    "message": "LLM Assistant",
+    "description": "Floating action menu header"
+  },
+  "menuCustomActions": {
+    "message": "Custom actions",
+    "description": "Custom actions section header in floating menu"
+  },
+  "menuFreePrompt": {
+    "message": "💬 Free prompt",
+    "description": "Free prompt menu item"
+  },
+  "chatTitle": {
+    "message": "💬 Free Prompt",
+    "description": "Chat window title"
+  },
+  "chatWelcomeWithContext": {
+    "message": "The text from the input field has been loaded as context. You can now give instructions, e.g. \"Improve the text\" or \"Translate into German\".",
+    "description": "Chat welcome message when context text is loaded"
+  },
+  "chatWelcomeNoContext": {
+    "message": "Describe what should happen with your text. You can send multiple instructions in sequence. Click **Apply** to insert the result into the text field.",
+    "description": "Chat welcome message without context"
+  },
+  "chatResetWithContext": {
+    "message": "Chat reset. The text from the input field has been reloaded as context. What would you like to do with it?",
+    "description": "Chat reset message with context"
+  },
+  "chatResetNoContext": {
+    "message": "Chat reset. What would you like to do with your text?",
+    "description": "Chat reset message without context"
+  },
+  "chatInputPlaceholder": {
+    "message": "Type an instruction...",
+    "description": "Chat input placeholder"
+  },
+  "chatSend": {
+    "message": "Send",
+    "description": "Chat send button"
+  },
+  "chatStop": {
+    "message": "⏹ Stop",
+    "description": "Chat stop button during generation"
+  },
+  "chatGenerating": {
+    "message": "Generating response...",
+    "description": "Typing indicator text"
+  },
+  "chatReset": {
+    "message": "↺ Reset",
+    "description": "Chat reset button"
+  },
+  "chatApply": {
+    "message": "✓ Apply",
+    "description": "Chat apply button"
+  },
+  "errorNoText": {
+    "message": "No text in the input field",
+    "description": "Error when input field is empty"
+  },
+  "errorNoResult": {
+    "message": "No generated text to apply.",
+    "description": "Error when no chat result to apply"
+  },
+  "errorNoElement": {
+    "message": "No input field found.",
+    "description": "Error when target element is missing"
+  },
+  "errorPrefix": {
+    "message": "LLM Text Assistant: ",
+    "description": "Prefix for error notifications"
+  },
+  "errorGeneric": {
+    "message": "Unknown error",
+    "description": "Generic error message"
+  },
+  "requestCancelled": {
+    "message": "Request cancelled.",
+    "description": "Info shown when user cancels a request"
+  },
+  "undoReplaced": {
+    "message": "✓ Text replaced",
+    "description": "Undo toast message after replacement"
+  },
+  "undoButton": {
+    "message": "Undo",
+    "description": "Undo button in toast"
+  },
+  "iconTooltipProcessing": {
+    "message": "Processing… Click to cancel",
+    "description": "Tooltip on icon while processing"
+  },
+  "optionsTitle": {
+    "message": "LLM Text Assistant – Settings",
+    "description": "Options page title"
+  },
+  "optionsHeading": {
+    "message": "LLM Text Assistant",
+    "description": "Options page heading"
+  },
+  "optionsSubtitle": {
+    "message": "Configure your API, system prompts and custom actions.",
+    "description": "Options page subtitle"
+  },
+  "optionsApiConfig": {
+    "message": "🔌 API configuration",
+    "description": "API configuration card heading"
+  },
+  "optionsApiUrl": {
+    "message": "API URL",
+    "description": "API URL label"
+  },
+  "optionsApiUrlHint": {
+    "message": "e.g. OpenAI, Ollama (http://localhost:11434/v1/chat/completions) or LM Studio",
+    "description": "API URL hint"
+  },
+  "optionsApiKey": {
+    "message": "API key",
+    "description": "API key label"
+  },
+  "optionsApiKeyHint": {
+    "message": "Leave empty for local endpoints",
+    "description": "API key hint"
+  },
+  "optionsModel": {
+    "message": "Model",
+    "description": "Model label"
+  },
+  "optionsModelHint": {
+    "message": "e.g. gpt-4, llama2, mistral",
+    "description": "Model hint"
+  },
+  "optionsTemperature": {
+    "message": "Temperature",
+    "description": "Temperature label"
+  },
+  "optionsTemperatureHint": {
+    "message": "0 = deterministic, 2 = very creative (default: 0.3)",
+    "description": "Temperature hint"
+  },
+  "optionsTimeout": {
+    "message": "Timeout (seconds)",
+    "description": "Timeout label"
+  },
+  "optionsTimeoutHint": {
+    "message": "Maximum wait time per request (default: 60)",
+    "description": "Timeout hint"
+  },
+  "optionsTargetLanguage": {
+    "message": "Target language (translate)",
+    "description": "Target language label"
+  },
+  "optionsTargetLanguageHint": {
+    "message": "Language to translate into, e.g. English, German, French",
+    "description": "Target language hint"
+  },
+  "optionsSystemPrompts": {
+    "message": "📝 System prompts",
+    "description": "System prompts card heading"
+  },
+  "optionsPromptTranslate": {
+    "message": "🌐 Translate",
+    "description": "Translate prompt label"
+  },
+  "optionsPromptExpand": {
+    "message": "✍️ Expand",
+    "description": "Expand prompt label"
+  },
+  "optionsPromptSummarize": {
+    "message": "📋 Summarize",
+    "description": "Summarize prompt label"
+  },
+  "optionsPromptGrammar": {
+    "message": "✅ Spelling & grammar",
+    "description": "Grammar prompt label"
+  },
+  "optionsCustomActions": {
+    "message": "⚡ Custom actions",
+    "description": "Custom actions card heading"
+  },
+  "optionsCustomActionsDesc": {
+    "message": "Define your own actions with individual prompts. They appear in the context menu and the floating menu on input fields.",
+    "description": "Custom actions description"
+  },
+  "optionsAddAction": {
+    "message": "＋ Add new action",
+    "description": "Add custom action button"
+  },
+  "optionsActionNumber": {
+    "message": "Action #$NUMBER$",
+    "description": "Custom action entry heading",
+    "placeholders": {
+      "number": {
+        "content": "$1",
+        "example": "1"
+      }
+    }
+  },
+  "optionsRemove": {
+    "message": "🗑 Remove",
+    "description": "Remove custom action button"
+  },
+  "optionsEmoji": {
+    "message": "Emoji",
+    "description": "Emoji label for custom action"
+  },
+  "optionsActionTitle": {
+    "message": "Title",
+    "description": "Title label for custom action"
+  },
+  "optionsActionTitlePlaceholder": {
+    "message": "Action title",
+    "description": "Title placeholder for custom action"
+  },
+  "optionsPromptLabel": {
+    "message": "Prompt",
+    "description": "Prompt label for custom action"
+  },
+  "optionsPromptPlaceholder": {
+    "message": "System prompt for this action...",
+    "description": "Prompt placeholder for custom action"
+  },
+  "optionsShowInContextMenu": {
+    "message": "Show in context menu",
+    "description": "Show in context menu toggle label"
+  },
+  "optionsShortcutForAction": {
+    "message": "Shortcut",
+    "description": "Shortcut label for custom action"
+  },
+  "optionsShortcuts": {
+    "message": "⌨️ Shortcuts",
+    "description": "Shortcuts card heading"
+  },
+  "optionsShortcutsDesc": {
+    "message": "Assign keyboard shortcuts to the actions. Click in a field and press the desired combination. Leave empty = no shortcut.",
+    "description": "Shortcuts description"
+  },
+  "shortcutForTranslate": {
+    "message": "Translate",
+    "description": "Shortcut label for translate action"
+  },
+  "shortcutForExpand": {
+    "message": "Expand",
+    "description": "Shortcut label for expand action"
+  },
+  "shortcutForSummarize": {
+    "message": "Summarize",
+    "description": "Shortcut label for summarize action"
+  },
+  "shortcutForGrammar": {
+    "message": "Spelling & grammar",
+    "description": "Shortcut label for grammar action"
+  },
+  "shortcutForFreePrompt": {
+    "message": "Free prompt",
+    "description": "Shortcut label for free prompt action"
+  },
+  "shortcutPlaceholder": {
+    "message": "Click and press key combination...",
+    "description": "Placeholder text for shortcut capture fields"
+  },
+  "optionsFreePrompt": {
+    "message": "💬 Free prompt (chat mode)",
+    "description": "Free prompt card heading"
+  },
+  "optionsFreePromptToggle": {
+    "message": "Show free prompt in the input field menu",
+    "description": "Free prompt toggle label"
+  },
+  "optionsFreePromptDesc": {
+    "message": "Enables the \"💬 Free prompt\" entry in the menu. A chat window opens where you can prompt a text via message input. With \"Apply\" the result is inserted into the text field.",
+    "description": "Free prompt description"
+  },
+  "optionsSave": {
+    "message": "💾 Save",
+    "description": "Save button"
+  },
+  "optionsReset": {
+    "message": "↩️ Reset to defaults",
+    "description": "Reset button"
+  },
+  "optionsSaved": {
+    "message": "✅ Settings saved!",
+    "description": "Save success message"
+  },
+  "optionsSaveError": {
+    "message": "Error saving: ",
+    "description": "Save error message prefix"
+  },
+  "optionsResetConfirm": {
+    "message": "Do you really want to reset all settings to their default values?",
+    "description": "Reset confirmation dialog"
+  },
+  "optionsResetDone": {
+    "message": "✅ Defaults restored.",
+    "description": "Reset success message"
+  },
+  "optionsResetError": {
+    "message": "Error resetting: ",
+    "description": "Reset error message prefix"
+  },
+  "defaultPromptTranslate": {
+    "message": "You are a translation tool. Translate the text marked below into $TARGET_LANGUAGE$. Preserve formatting, paragraphs and line breaks exactly. Output ONLY the translation – no introduction, no explanation, no meta comments.",
+    "description": "Default translate system prompt",
+    "placeholders": {
+      "target_language": {
+        "content": "$1",
+        "example": "German"
+      }
+    }
+  },
+  "defaultPromptExpand": {
+    "message": "You are a text tool. Turn the bullet points or sentence fragments marked below into a complete, fluent text. Preserve formatting, paragraphs and line breaks. Output ONLY the expanded text – no introduction, no explanation, no meta comments.",
+    "description": "Default expand system prompt"
+  },
+  "defaultPromptSummarize": {
+    "message": "You are a summarization tool. Summarize the text marked below briefly and concisely. Preserve formatting, paragraphs and line breaks. Output ONLY the summary – no introduction, no explanation, no meta comments.",
+    "description": "Default summarize system prompt"
+  },
+  "defaultPromptGrammar": {
+    "message": "You are a proofreading tool. Correct spelling, grammar and punctuation in the text marked below. Preserve formatting, paragraphs and line breaks. Output ONLY the corrected text – no introduction, no explanation, no meta comments.",
+    "description": "Default grammar system prompt"
+  },
+  "defaultTargetLanguage": {
+    "message": "English",
+    "description": "Default target language value"
+  },
+  "freePromptSystem": {
+    "message": "You are a helpful text assistant. Edit and phrase text according to the user's instructions. Reply only with the processed text, without additional explanations, unless the user asks for them.",
+    "description": "System prompt for free prompt chat mode"
+  },
+  "freePromptContextIntro": {
+    "message": "The user has loaded the following text from their input field as context. Refer to this text for all instructions:",
+    "description": "Context intro for free prompt system message"
+  }
+}

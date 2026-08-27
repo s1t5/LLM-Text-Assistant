@@ -11,7 +11,31 @@ Dieser Ordner enthält die **LLM Text Assistent** Browser-Erweiterung (Manifest 
 | `content.js` | Text-Ersetzung, schwebendes Icon, Chat-Fenster, Undo-Toast |
 | `options.html` / `options.js` | Einstellungsseite |
 | `_locales/` | i18n-Dateien (siehe unten) |
-| `Pub/` | Build-Artefakte (ZIPs, XPI, Firefox-Manifest) |
+| `Pub/` | Build-Artefakte (ZIPs, XPI, Firefox-/Thunderbird-Manifeste) |
+
+## Thunderbird-Variante
+
+Zusätzlich zur Chrome-/Firefox-Version gibt es eine **Thunderbird-Erweiterung** in `Pub/thunderbird-build/`, die im Mail-Verfassen-Fenster (Compose) läuft.
+
+### Unterschiede zur Browser-Version
+
+| Bereich | Browser | Thunderbird |
+|---|---|---|
+| **Injection** | `content_scripts` mit `matches: ["<all_urls>"]` | `browser.scripting.compose.registerScripts()` in `background.js` (MV3 ab TB 128). Alte `browser.composeScripts.register()` ist entfernt — nur für MV2. Beim Start werden auch **bereits geöffnete** Compose-Tabs via `browser.scripting.executeScript` injiziert. |
+| **Einstiegspunkt** | Kontextmenü + Floating-Icon + Shortcuts | Compose-Toolbar-Button (`compose_action` mit `default_popup: popup.html`) + Floating-Icon + Shortcuts. **Kontextmenüs werden nicht unterstützt** (keine `editable`/`selection`-Kontexte in Thunderbird) — Handler in `background.js` ist ein No-Op |
+| **Permissions** | `contextMenus`, `scripting`, `activeTab` | `compose`, `scripting` (+ `storage`) |
+| **Gecko-ID** | `llm-text-assistent@s1t5.dev` (AMO, seit v1.5.0) | `llm-text-assistent-thunderbird@s1t5.dev` (eigene ID, da „Doppelte Add-on-ID" bei gleicher ID wie Firefox-Version) |
+| **Min-Version** | FF 109 | TB 128 (MV3-only, `scripting.compose` erfordert min. 128) |
+
+`content.js`, `options.*` und `_locales/` sind **ungeändert** aus der Firefox-Version übernommen — die Text-Ersetzung im Compose-Fenster (HTML-Body = `contenteditable`, Plaintext-Body = `textarea`, Betreff = `input`) nutzt die gleichen Pfade.
+
+### Build
+
+```bash
+cd Pub/thunderbird-build && zip -r ../<version>-thunderbird.xpi manifest.json background.js content.js popup.html popup.js options.html options.js icons _locales
+```
+
+Installation: Thunderbird → Add-ons & Themes → Zahnrad → „Add-on aus Datei installieren" → `.xpi` wählen. Hinweis: Unsignierte XPIs akzeptiert nur die Release-Version von Thunderbird **nicht** standardmäßig — für dauerhafte Nutzung muss das Add-on über [addons.thunderbird.net](https://addons.thunderbird.net) signiert werden (oder in Daily/Beta bzw. mit `xpinstall.signatures.required=false` testen).
 
 ## Mehrsprachigkeit (i18n)
 
@@ -74,13 +98,13 @@ Kanonische Form: `[Ctrl+][Alt+][Shift+][Meta+]<Key>`
 
 ## Veröffentlichen (Chrome & Firefox)
 
-Build-Artefakte liegen in `Pub/`. Version in **beiden** Manifesten synchron erhöhen.
+Build-Artefakte liegen in `Pub/`. Benennungsschema: **`<version>-<ziel>.<endung>`** — also z. B. `1.5.0-chrome.zip`, `1.5.0-firefox.zip`, `1.5.0-thunderbird.xpi`. Version in **allen drei** Manifesten synchron erhöhen.
 
 ### Chrome (Chrome Web Store)
 
 ```bash
 # Aus dem Repo-Root
-zip -r Pub/<version>.zip manifest.json background.js content.js options.html options.js icons _locales
+zip -r Pub/<version>-chrome.zip manifest.json background.js content.js options.html options.js icons _locales
 ```
 
 - Upload: [Chrome Web Store Developer Dashboard](https://chrome.google.com/webstore/devconsole) → „Neues Element" bzw. bestehendes Paket aktualisieren → ZIP hochladen.
@@ -93,8 +117,9 @@ Firefox braucht ein eigenes Manifest mit `browser_specific_settings`:
 1. **`Pub/firefox-build/` aktualisieren**: geänderte Dateien aus dem Root hineinkopieren (`background.js`, `content.js`, `options.*`, `icons/`, `_locales/`).
 2. **Firefox-Manifest** liegt in `Pub/firefox-build/manifest.json` und unterscheidet sich vom Chrome-Root-Manifest durch:
    - `background.scripts` zusätzlich zu `service_worker` (Fallback für ältere FF-Versionen)
-   - `browser_specific_settings.gecko.id` — **muss zur AMO-Add-on-ID passen** (aktuell: `llm-translator@s1t5.dev`). Bei ID-Mismatch lehnt AMO beim Review ab.
+   - `browser_specific_settings.gecko.id` — **muss zur AMO-Add-on-ID passen**. Seit v1.5.0 lautet sie `llm-text-assistent@s1t5.dev` (früher: `llm-translator@s1t5.dev`; die alte ID wurde mit der Thunderbird-Veröffentlichung auf ATN belegt). Bei ID-Mismatch lehnt AMO beim Review ab.
    - `browser_specific_settings.gecko.strict_min_version` (aktuell `109.0`)
+   - `browser_specific_settings.gecko.data_collection_permissions.required: ["none"]` — AMO-Pflicht zur Datenerklärung (hier: keine Datenerhebung, API-Calls gehen direkt an den vom Nutzer konfigurierten Endpunkt).
 3. **ZIP bauen** (aus `Pub/firefox-build/` heraus, nicht aus dem Root!):
 
 ```bash
@@ -102,11 +127,6 @@ cd Pub/firefox-build && zip -r ../<version>-firefox.zip manifest.json background
 ```
 
 4. Upload: [addons.mozilla.org/developers](https://addons.mozilla.org/developers/) → bestehendes Add-on → neue Version hochladen.
-5. **Unsignierte XPI** (nur für Developer Edition / Nightly, nicht für Release-Firefox):
-
-```bash
-cd Pub/firefox-build && zip -r ../LLM-Text-Assistent-<version>.xpi manifest.json background.js content.js options.html options.js icons _locales
-```
 
 ### Checks vor dem Upload
 

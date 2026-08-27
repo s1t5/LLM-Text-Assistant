@@ -1,0 +1,372 @@
+{
+  "extensionName": {
+    "message": "LLM Text Assistent",
+    "description": "Name of the extension"
+  },
+  "extensionDescription": {
+    "message": "Verarbeite markierten Text in Eingabemasken über ein Chat-Completions-LLM direkt im Browser.",
+    "description": "Description of the extension"
+  },
+  "contextMenuParent": {
+    "message": "LLM Text Assistent",
+    "description": "Parent context menu title"
+  },
+  "actionTranslate": {
+    "message": "🌐 Ins $TARGET_LANGUAGE$ übersetzen",
+    "description": "Translate context menu item",
+    "placeholders": {
+      "target_language": {
+        "content": "$1",
+        "example": "Englische"
+      }
+    }
+  },
+  "actionExpand": {
+    "message": "✍️ Ausformulieren",
+    "description": "Expand context menu item"
+  },
+  "actionSummarize": {
+    "message": "📋 Zusammenfassen",
+    "description": "Summarize context menu item"
+  },
+  "actionGrammar": {
+    "message": "✅ Rechtschreibung & Grammatik",
+    "description": "Grammar context menu item"
+  },
+  "menuHeader": {
+    "message": "LLM Assistent",
+    "description": "Floating action menu header"
+  },
+  "menuCustomActions": {
+    "message": "Eigene Aktionen",
+    "description": "Custom actions section header in floating menu"
+  },
+  "menuFreePrompt": {
+    "message": "💬 Freier Prompt",
+    "description": "Free prompt menu item"
+  },
+  "chatTitle": {
+    "message": "💬 Freier Prompt",
+    "description": "Chat window title"
+  },
+  "chatWelcomeWithContext": {
+    "message": "Text aus dem Eingabefeld wurde als Kontext geladen. Du kannst jetzt Anweisungen geben, z.B. \"Verbessere den Text\" oder \"Übersetze ins Englische\".",
+    "description": "Chat welcome message when context text is loaded"
+  },
+  "chatWelcomeNoContext": {
+    "message": "Beschreibe, was mit deinem Text passieren soll. Du kannst mehrere Anweisungen nacheinander senden. Klicke auf **Übernehmen**, um das Ergebnis ins Textfeld einzusetzen.",
+    "description": "Chat welcome message without context"
+  },
+  "chatResetWithContext": {
+    "message": "Chat zurückgesetzt. Text aus dem Eingabefeld wurde neu als Kontext geladen. Was möchtest du damit machen?",
+    "description": "Chat reset message with context"
+  },
+  "chatResetNoContext": {
+    "message": "Chat zurückgesetzt. Was möchtest du mit deinem Text machen?",
+    "description": "Chat reset message without context"
+  },
+  "chatInputPlaceholder": {
+    "message": "Anweisung eingeben...",
+    "description": "Chat input placeholder"
+  },
+  "chatSend": {
+    "message": "Senden",
+    "description": "Chat send button"
+  },
+  "chatStop": {
+    "message": "⏹ Stopp",
+    "description": "Chat stop button during generation"
+  },
+  "chatGenerating": {
+    "message": "Generiere Antwort...",
+    "description": "Typing indicator text"
+  },
+  "chatReset": {
+    "message": "↺ Zurücksetzen",
+    "description": "Chat reset button"
+  },
+  "chatApply": {
+    "message": "✓ Übernehmen",
+    "description": "Chat apply button"
+  },
+  "errorNoText": {
+    "message": "Kein Text im Eingabefeld vorhanden",
+    "description": "Error when input field is empty"
+  },
+  "errorNoResult": {
+    "message": "Kein generierter Text zum Übernehmen vorhanden.",
+    "description": "Error when no chat result to apply"
+  },
+  "errorNoElement": {
+    "message": "Kein Eingabefeld gefunden.",
+    "description": "Error when target element is missing"
+  },
+  "errorPrefix": {
+    "message": "LLM Text Assistent: ",
+    "description": "Prefix for error notifications"
+  },
+  "errorGeneric": {
+    "message": "Unbekannter Fehler",
+    "description": "Generic error message"
+  },
+  "requestCancelled": {
+    "message": "Anfrage abgebrochen.",
+    "description": "Info shown when user cancels a request"
+  },
+  "undoReplaced": {
+    "message": "✓ Text ersetzt",
+    "description": "Undo toast message after replacement"
+  },
+  "undoButton": {
+    "message": "Rückgängig",
+    "description": "Undo button in toast"
+  },
+  "iconTooltipProcessing": {
+    "message": "Verarbeite… Klicken zum Abbrechen",
+    "description": "Tooltip on icon while processing"
+  },
+  "optionsTitle": {
+    "message": "LLM Text Assistent – Einstellungen",
+    "description": "Options page title"
+  },
+  "optionsHeading": {
+    "message": "LLM Text Assistent",
+    "description": "Options page heading"
+  },
+  "optionsSubtitle": {
+    "message": "Konfiguriere deine API, System-Prompts und benutzerdefinierte Aktionen.",
+    "description": "Options page subtitle"
+  },
+  "optionsApiConfig": {
+    "message": "🔌 API-Konfiguration",
+    "description": "API configuration card heading"
+  },
+  "optionsApiUrl": {
+    "message": "API URL",
+    "description": "API URL label"
+  },
+  "optionsApiUrlHint": {
+    "message": "z. B. OpenAI, Ollama (http://localhost:11434/v1/chat/completions) oder LM Studio",
+    "description": "API URL hint"
+  },
+  "optionsApiKey": {
+    "message": "API Key",
+    "description": "API key label"
+  },
+  "optionsApiKeyHint": {
+    "message": "Bei lokalen Endpunkten leer lassen",
+    "description": "API key hint"
+  },
+  "optionsModel": {
+    "message": "Modell",
+    "description": "Model label"
+  },
+  "optionsModelHint": {
+    "message": "z. B. gpt-4, llama2, mistral",
+    "description": "Model hint"
+  },
+  "optionsTemperature": {
+    "message": "Temperature",
+    "description": "Temperature label"
+  },
+  "optionsTemperatureHint": {
+    "message": "0 = deterministisch, 2 = sehr kreativ (Standard: 0.3)",
+    "description": "Temperature hint"
+  },
+  "optionsTimeout": {
+    "message": "Timeout (Sekunden)",
+    "description": "Timeout label"
+  },
+  "optionsTimeoutHint": {
+    "message": "Maximale Wartezeit pro Anfrage (Standard: 60)",
+    "description": "Timeout hint"
+  },
+  "optionsTargetLanguage": {
+    "message": "Zielsprache (Übersetzen)",
+    "description": "Target language label"
+  },
+  "optionsTargetLanguageHint": {
+    "message": "Sprache, in die übersetzt wird, z. B. Englisch, Deutsch, Französisch",
+    "description": "Target language hint"
+  },
+  "optionsSystemPrompts": {
+    "message": "📝 System-Prompts",
+    "description": "System prompts card heading"
+  },
+  "optionsPromptTranslate": {
+    "message": "🌐 Übersetzen",
+    "description": "Translate prompt label"
+  },
+  "optionsPromptExpand": {
+    "message": "✍️ Ausformulieren",
+    "description": "Expand prompt label"
+  },
+  "optionsPromptSummarize": {
+    "message": "📋 Zusammenfassen",
+    "description": "Summarize prompt label"
+  },
+  "optionsPromptGrammar": {
+    "message": "✅ Rechtschreibung & Grammatik",
+    "description": "Grammar prompt label"
+  },
+  "optionsCustomActions": {
+    "message": "⚡ Benutzerdefinierte Aktionen",
+    "description": "Custom actions card heading"
+  },
+  "optionsCustomActionsDesc": {
+    "message": "Definiere eigene Aktionen mit individuellen Prompts. Diese erscheinen im Kontextmenü und im schwebenden Menü an Eingabefeldern.",
+    "description": "Custom actions description"
+  },
+  "optionsAddAction": {
+    "message": "＋ Neue Aktion hinzufügen",
+    "description": "Add custom action button"
+  },
+  "optionsActionNumber": {
+    "message": "Aktion #$NUMBER$",
+    "description": "Custom action entry heading",
+    "placeholders": {
+      "number": {
+        "content": "$1",
+        "example": "1"
+      }
+    }
+  },
+  "optionsRemove": {
+    "message": "🗑 Entfernen",
+    "description": "Remove custom action button"
+  },
+  "optionsEmoji": {
+    "message": "Emoji",
+    "description": "Emoji label for custom action"
+  },
+  "optionsActionTitle": {
+    "message": "Titel",
+    "description": "Title label for custom action"
+  },
+  "optionsActionTitlePlaceholder": {
+    "message": "Aktionstitel",
+    "description": "Title placeholder for custom action"
+  },
+  "optionsPromptLabel": {
+    "message": "Prompt",
+    "description": "Prompt label for custom action"
+  },
+  "optionsPromptPlaceholder": {
+    "message": "System-Prompt für diese Aktion...",
+    "description": "Prompt placeholder for custom action"
+  },
+  "optionsShowInContextMenu": {
+    "message": "Im Kontextmenü anzeigen",
+    "description": "Show in context menu toggle label"
+  },
+  "optionsShortcutForAction": {
+    "message": "Tastenkürzel",
+    "description": "Shortcut label for custom action"
+  },
+  "optionsShortcuts": {
+    "message": "⌨️ Tastenkürzel",
+    "description": "Shortcuts card heading"
+  },
+  "optionsShortcutsDesc": {
+    "message": "Weise den Aktionen Tastenkürzel zu. Klicke in ein Feld und drücke die gewünschte Kombination. Leer lassen = kein Kürzel.",
+    "description": "Shortcuts description"
+  },
+  "shortcutForTranslate": {
+    "message": "Übersetzen",
+    "description": "Shortcut label for translate action"
+  },
+  "shortcutForExpand": {
+    "message": "Ausformulieren",
+    "description": "Shortcut label for expand action"
+  },
+  "shortcutForSummarize": {
+    "message": "Zusammenfassen",
+    "description": "Shortcut label for summarize action"
+  },
+  "shortcutForGrammar": {
+    "message": "Rechtschreibung & Grammatik",
+    "description": "Shortcut label for grammar action"
+  },
+  "shortcutForFreePrompt": {
+    "message": "Freier Prompt",
+    "description": "Shortcut label for free prompt action"
+  },
+  "shortcutPlaceholder": {
+    "message": "Klicken und Tastenkombination drücken...",
+    "description": "Placeholder text for shortcut capture fields"
+  },
+  "optionsFreePrompt": {
+    "message": "💬 Freier Prompt (Chat-Modus)",
+    "description": "Free prompt card heading"
+  },
+  "optionsFreePromptToggle": {
+    "message": "Freien Prompt im Eingabefeld-Menü anzeigen",
+    "description": "Free prompt toggle label"
+  },
+  "optionsFreePromptDesc": {
+    "message": "Aktiviert den Eintrag \"💬 Freier Prompt\" im Menü. Es öffnet sich ein Chat-Fenster, in dem du per Nachrichteneingabe einen Text prompten kannst. Mit \"Übernehmen\" wird das Ergebnis in das Textfeld eingesetzt.",
+    "description": "Free prompt description"
+  },
+  "optionsSave": {
+    "message": "💾 Speichern",
+    "description": "Save button"
+  },
+  "optionsReset": {
+    "message": "↩️ Auf Standard zurücksetzen",
+    "description": "Reset button"
+  },
+  "optionsSaved": {
+    "message": "✅ Einstellungen gespeichert!",
+    "description": "Save success message"
+  },
+  "optionsSaveError": {
+    "message": "Fehler beim Speichern: ",
+    "description": "Save error message prefix"
+  },
+  "optionsResetConfirm": {
+    "message": "Möchtest du wirklich alle Einstellungen auf die Standardwerte zurücksetzen?",
+    "description": "Reset confirmation dialog"
+  },
+  "optionsResetDone": {
+    "message": "✅ Standardwerte wiederhergestellt.",
+    "description": "Reset success message"
+  },
+  "optionsResetError": {
+    "message": "Fehler beim Zurücksetzen: ",
+    "description": "Reset error message prefix"
+  },
+  "defaultPromptTranslate": {
+    "message": "Du bist ein Übersetzungs-Werkzeug. Übersetze den unterhalb markierten Text ins $TARGET_LANGUAGE$. Behalte die Formatierung, Absätze und Zeilenumbrüche genau bei. Gib NUR die Übersetzung aus – keine Einleitung, keine Erklärung, keine Meta-Kommentare.",
+    "description": "Default translate system prompt",
+    "placeholders": {
+      "target_language": {
+        "content": "$1",
+        "example": "Englische"
+      }
+    }
+  },
+  "defaultPromptExpand": {
+    "message": "Du bist ein Text-Werkzeug. Formuliere die unterhalb markierten Stichpunkte oder Satzfragmente zu einem vollständigen, flüssigen Text aus. Behalte die Formatierung, Absätze und Zeilenumbrüche bei. Gib NUR den ausformulierten Text aus – keine Einleitung, keine Erklärung, keine Meta-Kommentare.",
+    "description": "Default expand system prompt"
+  },
+  "defaultPromptSummarize": {
+    "message": "Du bist ein Zusammenfassungs-Werkzeug. Fasse den unterhalb markierten Text kurz und prägnant zusammen. Behalte die Formatierung, Absätze und Zeilenumbrüche bei. Gib NUR die Zusammenfassung aus – keine Einleitung, keine Erklärung, keine Meta-Kommentare.",
+    "description": "Default summarize system prompt"
+  },
+  "defaultPromptGrammar": {
+    "message": "Du bist ein Korrektur-Werkzeug. Korrigiere Rechtschreibung, Grammatik und Zeichensetzung im unterhalb markierten Text. Behalte die Formatierung, Absätze und Zeilenumbrüche bei. Gib NUR den korrigierten Text aus – keine Einleitung, keine Erklärung, keine Meta-Kommentare.",
+    "description": "Default grammar system prompt"
+  },
+  "defaultTargetLanguage": {
+    "message": "Englisch",
+    "description": "Default target language value"
+  },
+  "freePromptSystem": {
+    "message": "Du bist ein hilfreicher Text-Assistent. Bearbeite und formuliere Text anhand der Anweisungen des Nutzers. Antworte nur mit dem verarbeiteten Text, ohne zusätzliche Erklärungen, es sei denn, der Nutzer bittet darum.",
+    "description": "System prompt for free prompt chat mode"
+  },
+  "freePromptContextIntro": {
+    "message": "Der Nutzer hat folgenden Text aus seinem Eingabefeld als Kontext geladen. Beziehe dich bei allen Anweisungen auf diesen Text:",
+    "description": "Context intro for free prompt system message"
+  }
+}

@@ -5,33 +5,33 @@
   "description": "__MSG_extensionDescription__",
   "default_locale": "de",
   "permissions": [
-    "contextMenus",
     "storage",
-    "activeTab",
+    "compose",
     "scripting"
   ],
   "host_permissions": [
     "<all_urls>"
   ],
   "background": {
-    "scripts": ["background.js"],
-    "service_worker": "background.js"
+    "scripts": ["background.js"]
   },
-  "content_scripts": [
-    {
-      "matches": ["<all_urls>"],
-      "js": ["content.js"],
-      "run_at": "document_end"
+  "compose_action": {
+    "default_title": "__MSG_contextMenuParent__",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
     }
-  ],
+  },
   "options_ui": {
     "page": "options.html",
     "open_in_tab": true
   },
   "browser_specific_settings": {
     "gecko": {
-      "id": "llm-text-assistent@s1t5.dev",
-      "strict_min_version": "109.0",
+      "id": "llm-text-assistent-thunderbird@s1t5.dev",
+      "strict_min_version": "128.0",
       "data_collection_permissions": {
         "required": ["none"]
       }
