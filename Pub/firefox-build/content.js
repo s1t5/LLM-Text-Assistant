@@ -1073,17 +1073,24 @@
     const isCE = sel.mode === 'ce';
     const isFrozen = sel.mode === 'ce-frozen';
 
-    const applyChunk = (newText) => {
+    const applyChunk = (newText, isFinal) => {
       if (isFrozen) {
         // Frozen mode: the LLM worked on the selection text, but we have no
         // live range to surgically replace into. Replace the full field content.
         finalizeCEFrozen(el, newText);
         return;
       }
-      if (isCE && newText.indexOf("\n") !== -1) {
-        // Multiline result: build real line-break structure instead of a plain
-        // text node, so the inserted replacement keeps its lines visible.
-        finalizeCEMultiline(el, sel, newText);
+      if (isCE) {
+        if (!isFinal && newText.indexOf("\n") === -1) {
+          // Single-line CE chunk: cheap in-place text node update.
+          replaceSelectedStreamingText(el, sel, rawText, newText);
+        } else {
+          // Multiline CE (intermediate or final): rebuild line-break structure
+          // from scratch so the visible state always equals *only* newText.
+          // The old fragment from the previous chunk is removed first —
+          // without that, every token would append another full copy.
+          finalizeCEMultiline(el, sel, newText);
+        }
       } else {
         replaceSelectedStreamingText(el, sel, rawText, newText);
       }
@@ -1096,7 +1103,7 @@
       // before/after boundaries), *then* close out the state. Reversing this
       // order makes the final apply re-splice with stale original indices and
       // eats characters after the selection when the result is shorter.
-      applyChunk(finalText || accumulated);
+      applyChunk(finalText || accumulated, true);
       cleanedSelection.delete(el);
       showUndoToast();
       activeInputElement = el;
@@ -1107,7 +1114,7 @@
     const requestId = startActionStream(textAction, streamSourceText, false, {
       onToken: (token) => {
         accumulated += token;
-        applyChunk(accumulated);
+        applyChunk(accumulated, false);
       },
       onDone: (finalText) => {
         finish(finalText);
@@ -1126,7 +1133,7 @@
         hideProcessingIndicator();
         currentRequestId = null;
         if (accumulated.trim().length > 0) {
-          applyChunk(accumulated);
+          applyChunk(accumulated, true);
           cleanedSelection.delete(el);
           showUndoToast();
         } else {
@@ -1359,99 +1366,106 @@
   // ContentEditable: replace the range with multi-line content, splitting on
   // newlines and using <br> between segments so lines stay visible in
   // rich-text composers that ignore "\n" in plain text nodes.
+  // During streaming we call this repeatedly with growing text. To avoid the
+  // cumulative-duplication problem we track our own output via start/end
+  // markers and rebuild only that slice.
   function finalizeCEMultiline(el, sel, newText) {
-    const range = sel && sel.range ? sel.range : null;
-    if (!range) {
-      // No usable range — fall back to in-place text node update if one exists.
-      const state = cleanedSelection.get(el);
-      if (state && state.node && el.contains(state.node)) {
-        state.node.textContent = newText;
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-      }
-      return;
-    }
+    let state = cleanedSelection.get(el);
 
-    // Remove a previously inserted streaming node if we already wrote one.
-    const prior = cleanedSelection.get(el);
-    if (prior && prior.node && el.contains(prior.node)) {
+    if (!state || !state.ceStart) {
+      const range = sel && sel.range ? sel.range : null;
+      if (!range) {
+        return;
+      }
+      // First chunk: replace the original selection with start/end markers.
       try {
-        prior.node.parentNode && prior.node.parentNode.removeChild(prior.node);
-      } catch (e) { /* ignore */ }
+        range.deleteContents();
+      } catch (e) { /* range may be detached */ }
+      const startMarker = document.createTextNode('');
+      const endMarker = document.createTextNode('');
+      try {
+        range.insertNode(endMarker);
+        range.insertNode(startMarker);
+        range.setStartAfter(startMarker);
+        range.setEndBefore(endMarker);
+      } catch (e) {
+        el.appendChild(startMarker);
+        el.appendChild(endMarker);
+      }
+      state = { ceStart: startMarker, ceEnd: endMarker, completed: false };
+      cleanedSelection.set(el, state);
     }
 
-    // Build a fragment: text lines separated by <br> elements.
-    const fragment = document.createDocumentFragment();
+    // Remove everything between the markers (previous chunk's output).
+    let n = state.ceStart.nextSibling;
+    while (n && n !== state.ceEnd) {
+      const next = n.nextSibling;
+      if (n.parentNode) n.parentNode.removeChild(n);
+      n = next;
+    }
+
+    // Insert current text as text nodes + <br> between the markers.
     const lines = String(newText).split("\n");
-    lines.forEach((line, index) => {
-      if (index > 0) {
-        fragment.appendChild(document.createElement('br'));
+    let cursor = state.ceStart;
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].length > 0) {
+        const textNode = document.createTextNode(lines[i]);
+        cursor.parentNode.insertBefore(textNode, cursor.nextSibling);
+        cursor = textNode;
       }
-      // Even empty lines need a node so consecutive <br> render correctly.
-      if (line.length > 0) {
-        fragment.appendChild(document.createTextNode(line));
-      } else {
-        fragment.appendChild(document.createTextNode(''));
+      if (i < lines.length - 1) {
+        const br = document.createElement('br');
+        cursor.parentNode.insertBefore(br, cursor.nextSibling);
+        cursor = br;
       }
-    });
-
-    try {
-      range.deleteContents();
-      range.insertNode(fragment);
-      range.collapse(false);
-    } catch (e) {
-      el.appendChild(fragment);
     }
 
-    try {
-      const selection = window.getSelection();
-      selection.removeAllRanges();
-      const after = document.createRange();
-      after.selectNodeContents(el);
-      after.collapse(false);
-      selection.addRange(after);
-    } catch (e) { /* ignore */ }
-
-    cleanedSelection.set(el, { completed: true });
     el.dispatchEvent(new Event('input', { bubbles: true }));
-    el.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
-  // Frozen mode: the context menu destroyed the live selection, but the
-  // background already froze the selection text. We replace the entire
-  // contenteditable with a fragment built from newText (with line breaks).
+  // Frozen mode: replaces the whole contenteditable, growing in place.
+  // Uses marker-based replacement so repeated calls don't duplicate content.
   function finalizeCEFrozen(el, newText) {
-    // If a previous chunk already created a node for us, remove it so we can
-    // rebuild with the final text.
-    const prior = cleanedSelection.get(el);
-    if (prior && prior.node && el.contains(prior.node)) {
-      try {
-        prior.node.parentNode && prior.node.parentNode.removeChild(prior.node);
-      } catch (e) { /* ignore */ }
+    let state = cleanedSelection.get(el);
+
+    if (!state || !state.ceStart) {
+      // First chunk: clear the element, then put start/end markers in.
+      while (el.firstChild) {
+        el.removeChild(el.firstChild);
+      }
+      const startMarker = document.createTextNode('');
+      const endMarker = document.createTextNode('');
+      el.appendChild(startMarker);
+      el.appendChild(endMarker);
+      state = { ceStart: startMarker, ceEnd: endMarker, completed: false };
+      cleanedSelection.set(el, state);
     }
 
-    const fragment = document.createDocumentFragment();
+    // Remove everything between the markers (previous chunk's output).
+    let n = state.ceStart.nextSibling;
+    while (n && n !== state.ceEnd) {
+      const next = n.nextSibling;
+      if (n.parentNode) n.parentNode.removeChild(n);
+      n = next;
+    }
+
+    // Insert current text between the markers.
     const lines = String(newText).split("\n");
-    lines.forEach((line, index) => {
-      if (index > 0) {
-        fragment.appendChild(document.createElement('br'));
+    let cursor = state.ceStart;
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].length > 0) {
+        const textNode = document.createTextNode(lines[i]);
+        cursor.parentNode.insertBefore(textNode, cursor.nextSibling);
+        cursor = textNode;
       }
-      if (line.length > 0) {
-        fragment.appendChild(document.createTextNode(line));
-      } else {
-        fragment.appendChild(document.createTextNode(''));
+      if (i < lines.length - 1) {
+        const br = document.createElement('br');
+        cursor.parentNode.insertBefore(br, cursor.nextSibling);
+        cursor = br;
       }
-    });
-
-    // Replace the entire content. Frozen mode is always a full-field
-    // replacement (there is no live range to surgically splice into).
-    while (el.firstChild) {
-      el.removeChild(el.firstChild);
     }
-    el.appendChild(fragment);
 
-    cleanedSelection.set(el, { completed: true });
     el.dispatchEvent(new Event('input', { bubbles: true }));
-    el.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
   function getElementFullText(element) {
