@@ -1,6 +1,24 @@
 (function() {
   'use strict';
 
+  // Guard against double injection. In Thunderbird the compose content script
+  // is registered via scripting.compose.registerScripts AND additionally
+  // injected via executeScript into already-open compose windows — the
+  // background service worker re-runs that injection on every wake, so
+  // content.js would execute multiple times in the same window (duplicate
+  // message listeners, every replacement applied twice).
+  // The guard stores a probe closure, not a plain boolean: calling it throws
+  // once the *previous* instance's extension context was invalidated (e.g.
+  // after an extension update), in which case we re-initialize instead of
+  // leaving the window dead.
+  if (window.__llmTextAssistentLoaded) {
+    try {
+      window.__llmTextAssistentLoaded();
+      return; // previous instance still alive — skip re-init
+    } catch (e) { /* previous context invalidated — re-init below */ }
+  }
+  window.__llmTextAssistentLoaded = function() { chrome.runtime.getURL(''); };
+
   // --- i18n helper ---
   function t(key, substitutions) {
     try {
@@ -1032,6 +1050,11 @@
           selection.addRange(sel.range);
         } catch (e) { /* ignore */ }
       }
+      // Undo needs the full element content — for contenteditable we restore
+      // via the captured innerHTML (see captureUndoState/restoreUndoState),
+      // but originalText is still required as a fallback. Without it undo
+      // would write the literal string "undefined" over the whole field.
+      originalFullText = getElementFullText(el);
       undoSelStart = null;
       undoSelEnd = null;
     } else if (sel.mode === 'ce-frozen') {
@@ -1081,15 +1104,20 @@
         return;
       }
       if (isCE) {
-        if (!isFinal && newText.indexOf("\n") === -1) {
-          // Single-line CE chunk: cheap in-place text node update.
-          replaceSelectedStreamingText(el, sel, rawText, newText);
-        } else {
+        // Once marker mode is active (a multiline chunk was seen), stay in it:
+        // replaceSelectedStreamingText would insert a *second* text node and
+        // overwrite the marker state, resurrecting the duplication bug.
+        const st = cleanedSelection.get(el);
+        const inMarkerMode = !!(st && st.ceStart);
+        if (inMarkerMode || isFinal || newText.indexOf("\n") !== -1) {
           // Multiline CE (intermediate or final): rebuild line-break structure
           // from scratch so the visible state always equals *only* newText.
           // The old fragment from the previous chunk is removed first —
           // without that, every token would append another full copy.
           finalizeCEMultiline(el, sel, newText);
+        } else {
+          // Single-line CE chunk: cheap in-place text node update.
+          replaceSelectedStreamingText(el, sel, rawText, newText);
         }
       } else {
         replaceSelectedStreamingText(el, sel, rawText, newText);
@@ -1373,6 +1401,15 @@
     let state = cleanedSelection.get(el);
 
     if (!state || !state.ceStart) {
+      // A previous streaming chunk may already have inserted a single text
+      // node via replaceSelectedStreamingText (state.node, no markers yet).
+      // Remember it so the transition below removes it instead of leaving a
+      // stale duplicate of the intermediate text next to the final result.
+      let staleNode = null;
+      if (state && state.node && el.contains(state.node)) {
+        staleNode = state.node;
+      }
+
       const range = sel && sel.range ? sel.range : null;
       if (!range) {
         return;
@@ -1391,6 +1428,12 @@
       } catch (e) {
         el.appendChild(startMarker);
         el.appendChild(endMarker);
+      }
+      // Remove the stale single-line node from the earlier streaming phase.
+      if (staleNode && staleNode.parentNode) {
+        try {
+          staleNode.parentNode.removeChild(staleNode);
+        } catch (e) { /* ignore */ }
       }
       state = { ceStart: startMarker, ceEnd: endMarker, completed: false };
       cleanedSelection.set(el, state);
@@ -2243,9 +2286,17 @@
       el.dispatchEvent(new Event('change', { bubbles: true }));
       el.focus();
     } else if (el.isContentEditable) {
-      // Plain text: assigning innerText rebuilds the element's text content
-      // without ever parsing the value as HTML (unlike innerHTML).
-      el.innerText = state.originalText;
+      // Prefer the captured innerHTML — plain text (innerText) cannot restore
+      // markup. If the markup was not captured, fall back to the original
+      // text; guard against undefined/null so undo can never write the
+      // literal string "undefined" into the field.
+      if (state.originalHTML !== null && state.originalHTML !== undefined) {
+        el.innerHTML = state.originalHTML;
+      } else {
+        el.innerText = String(state.originalText !== undefined && state.originalText !== null
+          ? state.originalText
+          : '');
+      }
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
       el.focus();
