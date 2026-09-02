@@ -773,6 +773,138 @@
   // so a later action starts fresh from the current selection.
   const cleanedSelection = new WeakMap();
 
+  // =====================================================================
+  //  FRAMEWORK-MANAGED CONTENTEDITABLE SUPPORT (Lexical, Quill, ProseMirror,
+  //  CKEditor, Draft.js, Slate, …)
+  // =====================================================================
+  // These editors keep an internal model and revert direct DOM mutations
+  // (el.innerText = …, range.insertNode(…)) on the next reconciliation, so a
+  // replacement would silently "not happen" (e.g. on Reddit). The only
+  // mutation path they accept is the native editing pipeline, i.e. text
+  // inserted at the DOM selection like a user would type. execCommand is
+  // deprecated but remains the only API that feeds beforeinput/input events
+  // into these editors with the resulting text.
+
+  function isFrameworkManagedCE(el) {
+    if (!el || !el.isContentEditable) return false;
+
+    // 1st signal: editor libraries attach recognizable properties to the
+    // contenteditable host or expose the editor state on it.
+    const hostPropKeys = [
+      'contentEditableOwner', // ProseMirror (old)
+      'editor',              // generic
+      '__lexicalEditor',     // Lexical dev builds
+      'lexicalEditor',        // Lexical
+      '__quill',
+      'quill',
+      'ckInstance',
+      '__reactContentEditable',
+      '__draftInstance'
+    ];
+    for (const key of hostPropKeys) {
+      try {
+        if (el[key] || (el.dataset && el.dataset[key])) return true;
+      } catch (e) { /* ignore */ }
+    }
+
+    // 2nd signal: ProseMirror marks its editable node with a class.
+    if (el.classList && (el.classList.contains('ProseMirror') ||
+        el.classList.contains('ql-editor') ||
+        el.classList.contains('ck-editor__editable') ||
+        el.classList.contains('public-DraftEditor-content'))) {
+      return true;
+    }
+
+    // 3rd signal: known editor classes on the editable host or its parent
+    // (some editors place the class on a wrapper element).
+    try {
+      if (el.closest && el.closest('.ProseMirror, .ql-editor, .ck-editor__editable, .public-DraftEditor-content, [data-lexical-editor], [data-lexical-editor="true"]')) {
+        return true;
+      }
+    } catch (e) { /* ignore */ }
+
+    // 4th signal: Lexical stores a registration key on the editor root as
+    // data-attribute in production builds.
+    try {
+      if (el.dataset && el.dataset.lexicalEditor !== undefined) return true;
+    } catch (e) { /* ignore */ }
+
+    // 5th signal: Lexical attaches a `__lexicalEditor` reference on the
+    // contenteditable in many builds; ProseMirror uses `pmViewDesc`.
+    try {
+      // eslint-disable-next-line no-unused-vars
+      for (const key of Object.keys(el)) {
+        if (key === 'pmViewDesc' || key === '__lexicalEditor' || key === 'lexicalEditor') {
+          return true;
+        }
+      }
+    } catch (e) { /* ignore */ }
+
+    return false;
+  }
+
+  // True when the range still lives inside el (not detached/clamped).
+  function rangeIsWithin(range, el) {
+    try {
+      return el.contains(range.commonAncestorContainer) && !range.collapsed;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // Framework-compatible value write for INPUT/TEXTAREA: direct `el.value =`
+  // assignments are reverted by React-controlled components because they
+  // bypass the native setter and React's value tracker.
+  function setNativeValue(el, value) {
+    try {
+      const descriptor = Object.getOwnPropertyDescriptor(el.constructor.prototype, 'value');
+      if (descriptor && descriptor.set) {
+        descriptor.set.call(el, value);
+      } else {
+        el.value = value;
+      }
+    } catch (e) {
+      el.value = value;
+    }
+    const tracker = el._valueTracker;
+    if (tracker) {
+      tracker.setValue(value);
+    }
+  }
+
+  // Replace `range` inside the contenteditable `el` with `text` through the
+  // native editing pipeline. Returns false when the editor did not apply the
+  // change — the caller then falls back to direct DOM writes.
+  function execInsertTextCE(el, range, text) {
+    try {
+      el.focus();
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      // Empty payload: just delete the selection (frameworks revert plain
+      // range.deleteContents() the same way they revert text writes).
+      const cmd = (text && text.length > 0) ? 'insertText' : 'delete';
+      const arg = (text && text.length > 0) ? text : null;
+      if (document.execCommand(cmd, false, arg)) {
+        return true;
+      }
+    } catch (e) { /* ignore */ }
+    return false;
+  }
+
+  // Insert at cursor / replace whole field via the editing pipeline. Used for
+  // full-text replacement in framework editors.
+  function execSetCEText(el, text) {
+    // Whole field: select everything, then insert over it.
+    const all = document.createRange();
+    all.selectNodeContents(el);
+    if (execInsertTextCE(el, all, text)) return true;
+
+    // Some editors reject full-select inserts; try replacing only the
+    // current caret line contents, else give up and let the caller know.
+    return false;
+  }
+
   function getOrCreatePort() {
     if (streamPort) {
       try {
@@ -1095,8 +1227,25 @@
     let accumulated = "";
     const isCE = sel.mode === 'ce';
     const isFrozen = sel.mode === 'ce-frozen';
+    const frameworkCE = el.isContentEditable && isFrameworkManagedCE(el);
 
     const applyChunk = (newText, isFinal) => {
+      if (frameworkCE) {
+        // Framework editors revert direct DOM writes, so all writes go through
+        // the editing pipeline. Frozen mode can stream whole-field rewrites;
+        // a live selection is replaced once at the end, because re-inserting
+        // per chunk over the original range boundaries would corrupt content.
+        if (isCE && !isFinal) return;
+        if (isCE && sel.range && rangeIsWithin(sel.range, el) &&
+            execInsertTextCE(el, sel.range, newText)) {
+          return;
+        }
+        const allRange = document.createRange();
+        allRange.selectNodeContents(el);
+        if (execInsertTextCE(el, allRange, newText)) return;
+        finalizeCEFrozen(el, newText);
+        return;
+      }
       if (isFrozen) {
         // Frozen mode: the LLM worked on the selection text, but we have no
         // live range to surgically replace into. Replace the full field content.
@@ -1318,7 +1467,7 @@
       if (cleanedSelection.has(el)) {
         const state = cleanedSelection.get(el);
         if (state && !state.completed && state.before !== undefined) {
-          el.value = state.before + newText + state.after;
+          setNativeValue(el, state.before + newText + state.after);
           const cursor = state.before.length + newText.length;
           el.setSelectionRange(cursor, cursor);
           el.dispatchEvent(new Event('input', { bubbles: true }));
@@ -1356,8 +1505,8 @@
         before = currentValue;
         after = '';
       }
-      cleanedSelection.set(el, { before, after, completed: false });
-      el.value = before + newText + after;
+        cleanedSelection.set(el, { before, after, completed: false });
+      setNativeValue(el, before + newText + after);
       const cursor = before.length + newText.length;
       el.setSelectionRange(cursor, cursor);
       el.dispatchEvent(new Event('input', { bubbles: true }));
@@ -2059,17 +2208,7 @@
         }
       }
 
-      // Use native setter for better React/framework compatibility
-      try {
-        const descriptor = Object.getOwnPropertyDescriptor(el.constructor.prototype, 'value');
-        if (descriptor && descriptor.set) {
-          descriptor.set.call(el, newText);
-        } else {
-          el.value = newText;
-        }
-      } catch (e) {
-        el.value = newText;
-      }
+      setNativeValue(el, newText);
 
       // Move cursor to end
       try {
@@ -2080,16 +2219,20 @@
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
 
-      // Also trigger React-specific events
-      const tracker = el._valueTracker;
-      if (tracker) {
-        tracker.setValue(newText);
-      }
-
     } else if (el.isContentEditable) {
       if (!document.contains(el)) {
         console.warn("[LLM Content] ContentEditable element no longer in DOM");
         return;
+      }
+
+      // Framework editors (Lexical/ProseMirror/Quill/…) revert direct DOM
+      // writes on the next keystroke; route through the editing pipeline.
+      if (isFrameworkManagedCE(el)) {
+        if (execSetCEText(el, newText)) {
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          return;
+        }
+        console.warn("[LLM Content] Framework editor rejected pipeline write, falling back");
       }
 
       el.innerText = newText;
@@ -2147,7 +2290,7 @@
       const before = originalValue.substring(0, start);
       const after = originalValue.substring(end);
 
-      el.value = before + newText + after;
+      setNativeValue(el, before + newText + after);
 
       const newCursorPos = start + newText.length;
       el.setSelectionRange(newCursorPos, newCursorPos);
@@ -2177,6 +2320,17 @@
       }
 
       captureUndoState(activeElement, activeElement.innerText || '', null, null, true);
+
+      // Framework editors revert direct DOM writes — route the replacement
+      // through the editing pipeline (see isFrameworkManagedCE).
+      if (isFrameworkManagedCE(activeElement)) {
+        if (execInsertTextCE(activeElement, range, newText)) {
+          activeElement.dispatchEvent(new Event("input", { bubbles: true }));
+          showUndoToast();
+          return;
+        }
+        console.warn("[LLM Content] Framework editor rejected pipeline write, falling back");
+      }
 
       // Delete selected content
       range.deleteContents();
@@ -2262,19 +2416,7 @@
     if (!el) return;
 
     if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
-      try {
-        const proto = el.tagName === 'TEXTAREA'
-          ? window.HTMLTextAreaElement.prototype
-          : window.HTMLInputElement.prototype;
-        const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
-        if (descriptor && descriptor.set) {
-          descriptor.set.call(el, state.originalText);
-        } else {
-          el.value = state.originalText;
-        }
-      } catch (e) {
-        el.value = state.originalText;
-      }
+      setNativeValue(el, state.originalText);
 
       if (state.selStart !== null && state.selEnd !== null) {
         try {
@@ -2290,6 +2432,22 @@
       // markup. If the markup was not captured, fall back to the original
       // text; guard against undefined/null so undo can never write the
       // literal string "undefined" into the field.
+      // Framework editors (Lexical etc.) revert innerHTML writes — route
+      // the restore through the editing pipeline instead.
+      if (isFrameworkManagedCE(el)) {
+        const restoreText = String(state.originalText !== undefined && state.originalText !== null
+          ? state.originalText
+          : '');
+        const all = document.createRange();
+        all.selectNodeContents(el);
+        if (execInsertTextCE(el, all, restoreText)) {
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.focus();
+          cleanedSelection.delete(el);
+          return;
+        }
+        console.warn("[LLM Content] Framework editor rejected undo write, falling back");
+      }
       if (state.originalHTML !== null && state.originalHTML !== undefined) {
         el.innerHTML = state.originalHTML;
       } else {
