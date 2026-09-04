@@ -35,6 +35,88 @@
   let actionMenu = null;
   let hideTimeout = null;
 
+  // --- UI host (Shadow DOM) ---
+  // All extension UI (icon, menu, chat, toasts) lives inside a closed shadow
+  // root attached to a single zero-size host element. This is essential in
+  // Thunderbird, where document.body IS the mail body: anything appended to
+  // it gets serialized into the sent message. The mail serializer does not
+  // cross shadow boundaries (AllowCrossShadowBoundary flag is not set), so
+  // shadow content can never leak into outgoing mail. It also isolates the
+  // UI from host-page CSS/JS in the browser.
+  let uiHost = null;
+  let uiRoot = null;
+  let uiSuspended = false;
+
+  function getUiRoot() {
+    if (uiSuspended) return null;
+    if (uiRoot && uiHost && uiHost.isConnected) return uiRoot;
+    // Drop stale hosts (e.g. left over in a reopened draft, or from a
+    // previous injection of this script whose context was invalidated).
+    try {
+      document.querySelectorAll('#llm-assistant-ui-host').forEach((el) => el.remove());
+    } catch (e) { /* ignore */ }
+    uiHost = document.createElement('div');
+    uiHost.id = 'llm-assistant-ui-host';
+    uiRoot = uiHost.attachShadow({ mode: 'closed' });
+    (document.body || document.documentElement).appendChild(uiHost);
+    return uiRoot;
+  }
+
+  function appendUi(el) {
+    const root = getUiRoot();
+    if (!root) return false;
+    root.appendChild(el);
+    return true;
+  }
+
+  function getUiElementById(id) {
+    if (!uiRoot) return null;
+    try {
+      return uiRoot.querySelector('#' + id);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // Detach the whole UI host from the document and forget all UI element
+  // references so they are rebuilt lazily on next use. Used in Thunderbird
+  // right before the mail body is serialized for sending, so that not even
+  // the (empty) host div remains in the outgoing message. While suspended,
+  // getUiRoot() refuses to re-create the host; any user interaction in the
+  // editor resumes normal operation (if the send succeeds, the window is
+  // gone and the resume never happens).
+  function suspendUi() {
+    uiSuspended = true;
+    // Cancel any in-flight request first (the icon that would cancel it is
+    // about to be destroyed).
+    if (currentRequestId !== null) {
+      try { cancelCurrentRequest(); } catch (e) { /* ignore */ }
+    }
+    if (undoToastTimer) {
+      clearTimeout(undoToastTimer);
+      undoToastTimer = null;
+    }
+    undoToast = null;
+    floatingIcon = null;
+    actionMenu = null;
+    chatWindow = null;
+    chatStreamingBubble = null;
+    chatStreamingText = "";
+    chatSendBtn = null;
+    chatInputField = null;
+    if (uiHost) {
+      try { uiHost.remove(); } catch (e) { /* ignore */ }
+    }
+    uiHost = null;
+    uiRoot = null;
+    // Also remove any stale hosts (e.g. a draft saved before this cleanup
+    // existed, reopened with its serialized empty host div, or a host left
+    // by a previous script instance after an extension update).
+    try {
+      document.querySelectorAll('#llm-assistant-ui-host').forEach((el) => el.remove());
+    } catch (e) { /* ignore */ }
+  }
+
   // Drag state for floating icon
   let isDraggingIcon = false;
   let dragOffsetX = 0;
@@ -159,6 +241,9 @@
 
     // Set the active element so executeAction / openFreePromptChat works correctly
     activeInputElement = el;
+    // A shortcut press is user interaction in the editor — resume UI if it
+    // was suspended for a send that ended up being cancelled.
+    uiSuspended = false;
 
     if (actionId === 'freePrompt') {
       openFreePromptChat();
@@ -209,6 +294,11 @@
     } else if (request.action === "showError") {
       showErrorNotification(request.message);
       sendResponse({ success: true });
+    } else if (request.action === "suspendUi") {
+      // Thunderbird: sent right before the compose body is serialized for
+      // sending/saving, so no trace of the UI can end up in the message.
+      suspendUi();
+      sendResponse({ success: true });
     } else if (request.action === "contextMenuProcess") {
       // Context menu selection replacement, handled with streaming via port.
       handleContextMenuProcess(request.textAction, request.text, request.selectionInfo)
@@ -248,18 +338,23 @@
     document.addEventListener('keydown', handleShortcutKeydown, true);
   }
 
+  // Track which elements already have a focus listener. A WeakSet instead of
+  // a data attribute: in Thunderbird the editable element IS the mail body,
+  // and any attribute we set on it would be serialized into the message.
+  const listenerAttachedElements = new WeakSet();
+
   function attachListeners(root) {
     const elements = root.querySelectorAll('input, textarea, [contenteditable="true"]');
     for (const el of elements) {
-      if (isTextInput(el) && !el.dataset.llmListenerAttached) {
-        el.dataset.llmListenerAttached = "true";
+      if (isTextInput(el) && !listenerAttachedElements.has(el)) {
+        listenerAttachedElements.add(el);
         el.addEventListener('focus', onElementFocus);
       }
     }
     // Also check if root itself is editable
     if (root.matches && root.matches('input, textarea, [contenteditable="true"]')) {
-      if (isTextInput(root) && !root.dataset.llmListenerAttached) {
-        root.dataset.llmListenerAttached = "true";
+      if (isTextInput(root) && !listenerAttachedElements.has(root)) {
+        listenerAttachedElements.add(root);
         root.addEventListener('focus', onElementFocus);
       }
     }
@@ -278,6 +373,9 @@
 
   function onElementFocus(e) {
     if (!isTextInput(e.target)) return;
+    // Re-enable UI after a suspend (e.g. a Thunderbird draft was saved or a
+    // send was cancelled after the suspend message arrived).
+    uiSuspended = false;
     activeInputElement = e.target;
     showFloatingIcon();
   }
@@ -285,6 +383,12 @@
   // Global click handler to detect clicks outside our UI
   document.addEventListener('click', (e) => {
     const target = e.target;
+
+    // Clicks inside our shadow UI retarget to the uiHost — never treat
+    // them as "outside" clicks.
+    if (uiHost && (uiHost === target || uiHost.contains(target))) {
+      return;
+    }
 
     // Check if click is on our floating icon
     if (floatingIcon && (floatingIcon === target || floatingIcon.contains(target))) {
@@ -297,7 +401,7 @@
     }
 
     // Check if click is on the chat window
-    const chatContainer = document.getElementById('llm-chat-overlay');
+    const chatContainer = getUiElementById('llm-chat-overlay');
     if (chatContainer && (chatContainer === target || chatContainer.contains(target))) {
       return;
     }
@@ -318,6 +422,7 @@
   }, true);
 
   function showFloatingIcon() {
+    if (uiSuspended) return;
     if (!activeInputElement) return;
 
     // Don't show for hidden or very small elements
@@ -455,7 +560,7 @@
       updateIconPosition();
     });
 
-    document.body.appendChild(floatingIcon);
+    appendUi(floatingIcon);
   }
 
   function onIconDrag(e) {
@@ -553,6 +658,7 @@
   }
 
   function createActionMenu() {
+    if (uiSuspended) return;
     if (actionMenu) {
       actionMenu.remove();
     }
@@ -708,7 +814,7 @@
       }, 300);
     });
 
-    document.body.appendChild(actionMenu);
+    appendUi(actionMenu);
   }
 
   function createActionMenuItem(actionId, displayTitle, shortcut) {
@@ -1362,6 +1468,9 @@
   // live selection reads, which the context menu may have already clamped.
   function handleContextMenuProcess(textAction, contextText, selectionInfo) {
     return new Promise((resolve, reject) => {
+      // User explicitly triggered an action (toolbar popup in Thunderbird or
+      // context menu in the browser) — resume UI suspended by a cancelled send.
+      uiSuspended = false;
       let el = document.activeElement;
       const isUsable = (node) => node && isTextInput(node);
       if (!isUsable(el)) {
@@ -1701,6 +1810,7 @@
   }
 
   function openFreePromptChat() {
+    if (uiSuspended) return;
     if (!activeInputElement) return;
     pendingElement = activeInputElement;
 
@@ -1708,7 +1818,7 @@
     hideFloatingIcon();
 
     // Remove existing chat window if any
-    const existing = document.getElementById('llm-chat-overlay');
+    const existing = getUiElementById('llm-chat-overlay');
     if (existing) existing.remove();
 
     // Load the current text from the input element as context
@@ -1910,7 +2020,7 @@
     chatWindow.appendChild(inputArea);
     chatWindow.appendChild(footer);
 
-    document.body.appendChild(chatWindow);
+    appendUi(chatWindow);
 
     // Focus input
     setTimeout(() => inputField.focus(), 100);
@@ -2479,6 +2589,7 @@
   // =====================================================================
 
   function showToast({ message, buttonLabel, backgroundColor, duration, onButton }) {
+    if (uiSuspended) return;
     hideUndoToast();
 
     const toast = document.createElement('div');
@@ -2535,7 +2646,7 @@
       toast.appendChild(btn);
     }
 
-    document.body.appendChild(toast);
+    appendUi(toast);
     undoToast = toast;
 
     // Animate in
@@ -2577,10 +2688,11 @@
   }
 
   function showErrorNotification(message) {
+    if (uiSuspended) return;
     hideProcessingIndicator();
 
     // Remove existing notification if present
-    const existing = document.getElementById("llm-assistant-error");
+    const existing = getUiElementById("llm-assistant-error");
     if (existing) {
       existing.remove();
     }
@@ -2606,7 +2718,7 @@
       wordWrap: "break-word"
     });
 
-    document.body.appendChild(notification);
+    appendUi(notification);
 
     // Auto-remove after 6 seconds
     setTimeout(() => {

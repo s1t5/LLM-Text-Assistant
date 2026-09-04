@@ -86,6 +86,21 @@ async function registerComposeScript() {
 }
 registerComposeScript();
 
+// --- UI cleanup before sending ---
+// The extension UI (floating icon, menu, chat) is injected into the compose
+// document. Although it lives in a closed shadow root (never serialized),
+// we also detach the UI host before the message body is serialized, so not
+// even the empty host element remains in sent mails or saved drafts.
+// onBeforeSend runs before Thunderbird reads the body from the editor.
+browser.compose.onBeforeSend.addListener((tab) => {
+  // Return the promise so Thunderbird waits for the cleanup to finish
+  // before it reads and serializes the compose body.
+  return browser.tabs.sendMessage(tab.id, { action: "suspendUi" }).catch(() => {
+    // Content script may not be injected (e.g. compose window without
+    // an editable field focused yet) — nothing to clean up then.
+  });
+});
+
 // --- Context Menu Management ---
 // Thunderbird does not support context menu items inside compose documents
 // (no "editable"/"selection" contexts there), so this is a no-op here.
