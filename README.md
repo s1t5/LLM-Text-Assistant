@@ -1,124 +1,117 @@
-# LLM Text Assistent – Chrome-Erweiterung
+# 🤖 LLM Text Assistant - Browser Extension
 
-Eine Chrome-Erweiterung, mit der du markierten Text in Eingabemasken über ein Chat-Completions-LLM direkt verarbeiten und automatisch ersetzen lassen kannst. Verfügbar auf Deutsch und Englisch.
+**A browser extension to process, translate and refine text in any input field with LLMs, directly where you type**
 
-## Funktionen
+<div style="display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 20px;">
+  <a href="https://chromewebstore.google.com/detail/llm-text-assistent/blmkelofjkniinchmipcoahggahcoelk" target="_blank"><img src="https://img.shields.io/badge/Chrome-4285F4?style=for-the-badge&logo=googlechrome&logoColor=white" alt="Chrome"></a>
+  <a href="https://addons.mozilla.org/de/firefox/addon/llm-text-assistent/" target="_blank"><img src="https://img.shields.io/badge/Firefox-FF7139?style=for-the-badge&logo=firefoxbrowser&logoColor=white" alt="Firefox"></a>
+  <a href="https://addons.thunderbird.net/de/thunderbird/addon/llm-text-assistent/" target="_blank"><img src="https://img.shields.io/badge/Thunderbird-0A6ED1?style=for-the-badge&logo=thunderbird&logoColor=white" alt="Thunderbird"></a>
+  <a href="https://www.buymeacoffee.com/s1t5" target="_blank"><img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-s1t5-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black" alt="Buy Me a Coffee"></a>
+  <a href="https://ko-fi.com/s1t5dev" target="_blank"><img src="https://img.shields.io/badge/Ko--Fi-s1t5dev-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white" alt="Ko-fi"></a>
+</div>
 
-- **Kontextmenü-Integration**: Rechtsklick auf markierten Text in einem Eingabefeld → **„LLM Text Assistent"** mit vier Aktionen:
-  1. **🌐 Übersetzen** – Übersetzt den markierten Text in die konfigurierbare Zielsprache
-  2. **✍️ Ausformulieren** – Formuliert Stichpunkte oder Satzfragmente zu einem vollständigen, flüssigen Text aus
-  3. **📋 Zusammenfassen** – Fasst einen längeren Text kurz und prägnant zusammen
-  4. **✅ Rechtschreibung & Grammatik** – Korrigiert Rechtschreibung, Grammatik und Zeichensetzung
-- **Streaming-Ergebnisse (Live-Typing)**: Der Text erscheint Token für Token im Eingabefeld bzw. im Chat-Fenster, sobald das Modell ihn generiert – kein Warten auf die komplette Antwort
-- **Abbrechen**: Während einer Anfrage kannst du durch Klick auf das Lade-Icon (⏳) oder den Stopp-Button im Chat die Anfrage abbrechen. Bereits empfangener Text bleibt erhalten.
-- **Rückgängig**: Nach jeder Ersetzung erscheint unten rechts ein Toast mit **Rückgängig**-Button (8 Sekunden sichtbar, Hover pausiert den Timer)
-- **Robuste Fehlerbehandlung**: Konfigurierbarer Timeout (Standard 60s), automatische Wiederholung bei Netzwerkfehlern und Rate-Limits (429/5xx), verständliche Fehlermeldungen (z. B. „API-Key prüfen" bei 401)
-- **Benutzerdefinierte Aktionen**: Definiere eigene Aktionen mit Emoji, Titel und System-Prompt – sichtbar im Kontextmenü und im schwebenden Icon-Menü
-- **Freier Prompt (Chat-Modus)**: Öffne ein Chat-Fenster am Eingabefeld, um iterative Anweisungen mit Kontext zu senden
-- **Unterstützte Eingabeelemente**: `<input>`, `<textarea>` und `contenteditable`-Elemente
-- **Flexible API-Konfiguration**: Kompatibel mit OpenAI, eigenen Endpunkten (z. B. Ollama, LM Studio) und anderen OpenAI-kompatiblen APIs
-- **Anpassbare System-Prompts**: Lege für jede der vier Aktionen fest, wie das LLM den Text verarbeiten soll
-- **Mehrsprachigkeit**: UI und Standard-Prompts werden automatisch in der Browser-Sprache angezeigt (Deutsch/Englisch enthalten)
+## ✨ Key Features
 
-## Dateien
+### 📌 Core Features
+- **Four built-in actions**: 🌐 Translate, ✍️ Expand, 📋 Summarize, ✅ Grammar & Spelling, available via context menu and a floating 🤖 icon next to any input field
+- **Custom actions**: Define your own actions with emoji, title and system prompt
+- **Free Prompt (Chat mode)**: Open a chat window at the input field to give iterative instructions with full context
+- **Streaming results (live typing)**: Text appears token by token as the model generates it, no waiting for the full response
+- **Works everywhere**: `<input>`, `<textarea>` and `contenteditable` elements (including rich-text editors)
 
-| Datei | Beschreibung |
-|-------|-------------|
-| `manifest.json` | Erweiterungs-Manifest (Manifest V3, i18n) |
-| `background.js` | Service Worker: Kontextmenü, API-Calls, Streaming, Retry/Abort |
-| `content.js` | Text-Ersetzung, schwebendes Icon, Chat-Fenster, Undo-Toast |
-| `options.html` / `options.js` | Einstellungsseite (i18n) |
-| `_locales/de/messages.json` | Deutsche UI-Texte und Standard-Prompts |
-| `_locales/en/messages.json` | Englische UI-Texte und Standard-Prompts |
-| `icons/icon.svg` | Erweiterungs-Icon |
+### ⌨️ Shortcuts & UX
+- **Keyboard shortcuts**: Assign shortcuts to built-in actions, custom actions and the free prompt, triggered only while a text field is focused, always wins over page shortcuts
+- **Undo toast**: After every replacement a toast appears with an **Undo** button (8 seconds, hover pauses the timer)
+- **Cancel requests**: Abort a running request by clicking the loading icon (⏳) or the stop button in chat, already received text is kept
+- **Robust error handling**: Configurable timeout (default 60s), automatic retries on network errors and rate limits (429/5xx), clear error messages (e.g. "check your API key" on 401)
 
-## Installation & Deployment
+### 🔌 Provider Support
+- Works with **any OpenAI-compatible Chat Completions API**:
+  - **Cloud**: OpenAI, Mistral, Groq, Google Gemini (OpenAI-compat endpoint) and more
+  - **Local**: Ollama, LM Studio, llama.cpp, vLLM; no API key required, data never leaves your machine
+- **Flexible configuration**: API URL, API key, model, temperature, timeout
+- **Customizable system prompts** for every built-in action (e.g. `{TARGET_LANGUAGE}` placeholder for translation)
 
-### Voraussetzungen
+### 🌍 Internationalization
+- Full UI and default prompts in **English and German** (auto-selected by browser language)
+- Target language for translation is freely configurable
 
-- Google Chrome (Desktop) in einer aktuellen Version
-- Alle Dateien dieses Repos in einem gemeinsamen Ordner
+## 🚀 Quick Start
 
-### Temporäre Installation (Entwicklung & Test)
+### Prerequisites
+- **Chrome** (or any Chromium browser), **Firefox** 109+ or **Thunderbird** 128+
+- An OpenAI-compatible API endpoint (cloud or local)
 
-1. **Chrome öffnen** und in die Adressleiste eingeben:
-   ```
-   chrome://extensions/
-   ```
-   Drücke `Enter`.
+### 🛠️ Installation
 
-2. Oben rechts den Schalter **„Entwicklermodus"** aktivieren.
+Install the extension directly from the official stores:
 
-3. Auf den Button **„Entpackte Erweiterung laden"** klicken.
+<div style="display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 20px;">
+  <a href="https://chromewebstore.google.com/detail/llm-text-assistent/blmkelofjkniinchmipcoahggahcoelk" target="_blank"><img src="https://img.shields.io/badge/Chrome%20Web%20Store-Install-4285F4?style=for-the-badge&logo=googlechrome&logoColor=white" alt="Chrome Web Store"></a>
+  <a href="https://addons.mozilla.org/de/firefox/addon/llm-text-assistent/" target="_blank"><img src="https://img.shields.io/badge/Firefox%20Add--ons-Install-FF7139?style=for-the-badge&logo=firefoxbrowser&logoColor=white" alt="Firefox Add-ons"></a>
+  <a href="https://addons.thunderbird.net/de/thunderbird/addon/llm-text-assistent/" target="_blank"><img src="https://img.shields.io/badge/Thunderbird%20Add--ons-Install-0A6ED1?style=for-the-badge&logo=thunderbird&logoColor=white" alt="Thunderbird Add-ons"></a>
+</div>
 
-4. Im Datei-Auswahldialog den Ordner auswählen, in dem sich alle Dateien der Erweiterung befinden, und auf **„Ordner auswählen"** klicken.
+- **Chrome**: [Chrome Web Store](https://chromewebstore.google.com/detail/llm-text-assistent/blmkelofjkniinchmipcoahggahcoelk)
+- **Firefox**: [addons.mozilla.org](https://addons.mozilla.org/de/firefox/addon/llm-text-assistent/)
+- **Thunderbird**: [addons.thunderbird.net](https://addons.thunderbird.net/de/thunderbird/addon/llm-text-assistent/)
 
-5. Die Erweiterung erscheint nun in der Liste. Sie ist sofort aktiv.
 
-> **Hinweis**: Bei einer temporären Installation bleibt die Erweiterung nach einem Chrome-Neustart erhalten, solange du den Ordner nicht verschiebst oder löschst.
+## ⚙️ Configuration
 
-### Als ZIP/Paket installieren
+Open the extension options (puzzle icon in the toolbar → **LLM Text Assistant** → gear icon):
 
-1. Alle Dateien in ein ZIP-Archiv packen (z. B. `LLMTextAssistent.zip`).
+| Setting | Description |
+|---------|-------------|
+| **API URL** | Chat Completions endpoint, e.g. `https://api.openai.com/v1/chat/completions` |
+| **API Key** | Your API key (leave empty for local endpoints) |
+| **Model** | e.g. `gpt-4o-mini`, `llama3.1`, `mistral` |
+| **Temperature** | Creativity (0–2, default: 0.3) |
+| **Timeout (seconds)** | Max wait time per attempt (default: 60). Retries twice on timeout. |
+| **Target language (Translate)** | Language to translate into (e.g. English, German, French) |
+| **System prompts** | Per-action instructions, e.g. `{TARGET_LANGUAGE}` placeholder for translation |
+| **Shortcuts** | Assign keyboard shortcuts to any action (canonical form: `[Ctrl+][Alt+][Shift+][Meta+]<Key>`) |
 
-2. In Chrome `chrome://extensions/` öffnen und den **Entwicklermodus** aktivieren.
+### Local endpoint examples
 
-3. Die ZIP-Datei per **Drag & Drop** auf die Seite ziehen.
+| Provider | URL | API Key |
+|----------|-----|---------|
+| **Ollama** | `http://localhost:11434/v1/chat/completions` | leave empty |
+| **LM Studio** | `http://localhost:1234/v1/chat/completions` | leave empty |
 
-4. Chrome installiert die Erweiterung automatisch.
+## 📖 Usage
 
-### Veröffentlichung im Chrome Web Store (optional)
+1. Mark text in an input field (or just focus the field to use the floating 🤖 icon)
+2. Choose an action via right-click context menu, the floating menu, or a keyboard shortcut
+3. The processed text replaces the selection / field content **live** (streaming)
+4. **Cancel**: click the loading icon or "⏹ Stop" in the chat window
+5. **Undo**: use the button in the green toast at the bottom right
 
-Wenn du die Erweiterung öffentlich anbieten möchtest:
+## 🔒 Privacy & Security Notes
 
-1. Einmalige Registrierung als Chrome Web Store Entwickler unter [chrome.google.com/webstore/devconsole](https://chrome.google.com/webstore/devconsole).
+- **No data collection**: The extension collects nothing. API calls go directly from your browser to the endpoint you configured, there is no intermediate server
+- **API key storage**: Your API key is stored in the browser's extension storage and only sent as `Authorization: Bearer` header to the configured endpoint
+- **Permissions**: `<all_urls>` host permission is required to detect and modify text fields on any website; `contextMenus`, `storage`, `activeTab`, `scripting` are used for the menu, settings and text replacement
 
-2. Erweiterung als ZIP packen (kein `.crx` nötig).
+## 🤝 Contributing
 
-3. Im Entwickler-Dashboard auf **„Neues Element"** klicken und das ZIP hochladen.
+We welcome contributions from the community!
 
-4. Store-Eintrag ausfüllen (Screenshots, Beschreibung, Kategorie).
+For code changes by third parties, please coordinate with us via email at mail@s1t5.dev before making any changes.
 
-5. Zum Review einreichen. Nach Freigabe ist die Erweiterung im Store verfügbar.
+You can also:
+- Open an Issue for bug reports or feature requests
+- Submit a Pull Request for improvements
+- Help improve documentation
 
-## Konfiguration
+## 💖 Support the Project
 
-1. Klicke auf das Puzzle-Symbol in der Chrome-Symbolleiste, halte die Maus über **„LLM Text Assistent"** und klicke auf das Zahnrad-Symbol **„Optionen"**.
+If you find this project useful and would like to support its continued development, you can buy me a coffee! Your support helps me dedicate more time and resources to improving the application and adding new features. While financial support is not required, it is greatly appreciated and helps ensure the project's ongoing maintenance and enhancement.
 
-2. Trage die folgenden Werte ein:
+<a href="https://www.buymeacoffee.com/s1t5" target="_blank"><img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-s1t5-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black" alt="Buy Me a Coffee"></a>
+<a href="https://ko-fi.com/s1t5dev" target="_blank"><img src="https://img.shields.io/badge/Ko--Fi-s1t5dev-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white" alt="Ko-fi"></a>
+<a href="https://github.com/sponsors/s1t5" target="_blank"><img src="https://img.shields.io/badge/GitHub%20Sponsors-s1t5-FF9A00?style=for-the-badge&logo=github-sponsors&logoColor=white" alt="GitHub Sponsors"></a>
 
-| Einstellung | Beschreibung |
-|-------------|--------------|
-| **API URL** | Endpunkt für Chat Completions, z. B. `https://api.openai.com/v1/chat/completions` |
-| **API Key** | Dein API-Key (falls erforderlich) |
-| **Modell** | z. B. `gpt-3.5-turbo`, `gpt-4`, `llama2`, `mistral` |
-| **Temperature** | Kreativität (0–2, Standard: 0.3) |
-| **Timeout (Sekunden)** | Maximale Wartezeit pro Versuch (Standard: 60). Bei Überschreitung wird zweimal wiederholt. |
-| **Zielsprache (Übersetzen)** | Sprache, in die übersetzt wird (z. B. Englisch, Deutsch, Französisch) |
-| **System Prompt – Übersetzen** | Anweisung für die Übersetzung (Platzhalter `{TARGET_LANGUAGE}` wird durch die Zielsprache ersetzt) |
-| **System Prompt – Ausformulieren** | Anweisung für das Ausformulieren von Stichpunkten |
-| **System Prompt – Zusammenfassen** | Anweisung für die Zusammenfassung |
-| **System Prompt – Rechtschreibung & Grammatik** | Anweisung für die Korrektur |
+---
 
-### Beispiele für lokale Endpunkte
-
-- **Ollama**: `http://localhost:11434/v1/chat/completions` (API-Key leer lassen)
-- **LM Studio**: `http://localhost:1234/v1/chat/completions` (API-Key leer lassen)
-
-## Nutzung
-
-1. Markiere den gewünschten Text in einem Eingabefeld (oder fokussiere das Feld und nutze das 🤖-Icon).
-2. Wähle eine Aktion per Rechtsklick-Kontextmenü oder über das schwebende Menü.
-3. Der verarbeitete Text ersetzt die Markierung bzw. den Feldinhalt **live** (Streaming).
-4. **Abbrechen**: Klick auf das Lade-Icon oder „⏹ Stopp" im Chat.
-5. **Rückgängig**: Nutze den Button im grünen Toast unten rechts.
-
-## Wichtige Hinweise
-
-- **Rechte**: Die Erweiterung benötigt die Berechtigung, auf Webseiten zuzugreifen (`<all_urls>`) und Kontextmenüs zu erstellen. Dies wird bei der Installation transparent angezeigt.
-- **Service Worker**: Im Gegensatz zu Firefox läuft der Hintergrundprozess in Chrome als Service Worker (Manifest V3).
-- **Retry-Logik**: Bei Netzwerkfehlern, 429 (Rate-Limit) und 5xx wird bis zu zweimal wiederholt (mit 1s bzw. 3s Pause). Bei 401/403/404 wird sofort abgebrochen, da dies Konfigurationsfehler sind.
-
-## Lizenz
-
-MIT
+📄 *License: GNU GENERAL PUBLIC LICENSE Version 3 (see LICENSE file)*
