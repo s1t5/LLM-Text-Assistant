@@ -987,6 +987,33 @@
       const selection = window.getSelection();
       selection.removeAllRanges();
       selection.addRange(range);
+      // Multiline payload: a single insertText with embedded "\n" inserts the
+      // breaks as *plain text* — most editors (and Thunderbird's compose body)
+      // don't render a bare "\n" text node as a line break, so every newline
+      // silently disappears. Instead insert line by line and issue a real
+      // line break (like pressing Enter) between the lines: <br> via
+      // insertLineBreak (what the pre-framework code inserted), falling back
+      // to insertParagraph where insertLineBreak is unsupported.
+      const s = String(text);
+      if (s.indexOf("\n") !== -1) {
+        let ok = true;
+        const lines = s.split("\n");
+        for (let i = 0; i < lines.length; i++) {
+          if (lines[i].length > 0) {
+            if (!document.execCommand("insertText", false, lines[i])) ok = false;
+          }
+          if (i < lines.length - 1) {
+            // insertLineBreak → <br> (matches the pre-framework behavior);
+            // fall back to insertParagraph only if the engine lacks it.
+            if (!document.execCommand("insertLineBreak")) {
+              if (!document.execCommand("insertParagraph")) {
+                ok = false;
+              }
+            }
+          }
+        }
+        return ok;
+      }
       // Empty payload: just delete the selection (frameworks revert plain
       // range.deleteContents() the same way they revert text writes).
       const cmd = (text && text.length > 0) ? 'insertText' : 'delete';
@@ -1175,22 +1202,6 @@
     return '';
   }
 
-  // Line-break policy for inline selection replacement: the result is spliced
-  // between the text before and after the selection, so line breaks in the
-  // LLM output would break the surrounding flow (splitting the paragraph the
-  // selection lives in). Any whitespace run containing a line break collapses
-  // into a single space; at the very start/end of the result it vanishes
-  // entirely (nothing to separate there). Whole-field replacements
-  // (startFullTextReplacement, frozen mode, replaceFullText, chat "apply")
-  // keep the model's structure.
-  function collapseSelectionLineBreaks(text) {
-    const s = String(text);
-    return s
-      .replace(/(?:[ \t]*[\r\n\u2028\u2029]+)+[ \t]*$/, "")
-      .replace(/^(?:[ \t]*[\r\n\u2028\u2029]+)+[ \t]*/, "")
-      .replace(/[ \t]*[\r\n\u2028\u2029]+[ \t]*/g, " ");
-  }
-
   // Full-text replacement (streaming)
   function startFullTextReplacement(textAction, el, fallbackText) {
     // Clear leftover state from a previous selection run
@@ -1352,12 +1363,6 @@
     const frameworkCE = el.isContentEditable && isFrameworkManagedCE(el);
 
     const applyChunk = (newText, isFinal) => {
-      // Selection replacement is an inline splice into surrounding text, so
-      // line breaks in the result collapse to single spaces. Frozen mode
-      // rewrites the whole field and keeps the model's line structure.
-      if (!isFrozen) {
-        newText = collapseSelectionLineBreaks(newText);
-      }
       if (frameworkCE) {
         // Framework editors revert direct DOM writes, so all writes go through
         // the editing pipeline. Frozen mode can stream whole-field rewrites;
@@ -2398,10 +2403,6 @@
   }
 
   function replaceSelectedText(newText) {
-    // Inline selection replacement: collapse line breaks so multi-line LLM
-    // output doesn't split the paragraph around the selection.
-    newText = collapseSelectionLineBreaks(newText);
-
     const activeElement = document.activeElement;
 
     if (!activeElement) {
