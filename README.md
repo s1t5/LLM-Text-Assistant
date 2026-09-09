@@ -87,6 +87,8 @@ Open the extension options (puzzle icon in the toolbar → **LLM Text Assistant*
 4. **Cancel**: click the loading icon or "⏹ Stop" in the chat window
 5. **Undo**: use the button in the green toast at the bottom right
 
+**Line breaks**: when replacing a *selection*, line breaks in the result collapse to single spaces so the surrounding paragraph stays intact — a multi-line result would otherwise split the text flow. When processing the *entire field*, the model's line structure (paragraphs, lists) is preserved.
+
 ## 🔒 Privacy & Security Notes
 
 - **No data collection**: The extension collects nothing. API calls go directly from your browser to the endpoint you configured, there is no intermediate server

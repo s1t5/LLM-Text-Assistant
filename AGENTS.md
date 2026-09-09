@@ -29,6 +29,18 @@ Zusätzlich zur Chrome-/Firefox-Version gibt es eine **Thunderbird-Erweiterung**
 
 `content.js`, `options.*` und `_locales/` sind **ungeändert** aus der Firefox-Version übernommen — die Text-Ersetzung im Compose-Fenster (HTML-Body = `contenteditable`, Plaintext-Body = `textarea`, Betreff = `input`) nutzt die gleichen Pfade.
 
+### Zeilenumbruch-Regel (seit v1.5.6)
+
+Bei der **Selektions-Ersetzung** (Ergebnis wird inline zwischen Vorher/Nachher-Text eingefügt) kollabieren Zeilenumbrüche im LLM-Ergebnis zu einem einfachen Leerzeichen (`collapseSelectionLineBreaks` in `content.js`) — sonst würde ein mehrzeiliges Ergebnis den umgebenden Absatz zerreißen. Umbrüche am Anfang/Ende des Ergebnisses entfallen ganz.
+
+Nur bei der **Ersetzung des gesamten Textfelds** (keine Selektion, Frozen-Modus, Chat „Übernehmen", `replaceFullText`) bleibt die Struktur des Modells (Absätze, Listen) erhalten.
+
+Regel-Implementation in drei Schichten — **alle zusammen ändern**:
+
+1. `content.js` → `collapseSelectionLineBreaks` (Helper), aufgerufen in `startSelectionReplacement.applyChunk` (nicht-Frozen) und `replaceSelectedText` (Legacy-Nachrichtenpfad `"replaceText"`)
+2. `background.js` (Root + `Pub/firefox-build/`) → `injectReplacement`-Fallback (kollabiert bei `!fullReplace` inline)
+3. Test: `test-collapse.js` (node) prüft die Helper-Regex
+
 ### Build
 
 ```bash

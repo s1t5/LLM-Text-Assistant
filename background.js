@@ -759,6 +759,13 @@ function injectReplacement(tabId, replacementText, replaceFull = false) {
       const activeElement = document.activeElement;
       if (!activeElement) return;
 
+      // Inline selection replacement: collapse line breaks in the result so
+      // multi-line LLM output doesn't break the surrounding text flow.
+      // Full-field replacement keeps the model's line structure.
+      if (!fullReplace) {
+        newText = String(newText).replace(/[ \t]*[\r\n\u2028\u2029]+[ \t]*/g, " ");
+      }
+
       if (activeElement.tagName === "INPUT" || activeElement.tagName === "TEXTAREA") {
         const el = activeElement;
         if (fullReplace) {
