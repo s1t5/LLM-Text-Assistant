@@ -110,7 +110,29 @@ Kanonische Form: `[Ctrl+][Alt+][Shift+][Meta+]<Key>`
 
 ## Veröffentlichen (Chrome & Firefox)
 
-Build-Artefakte liegen in `Pub/`. Benennungsschema: **`<version>-<ziel>.<endung>`** — also z. B. `1.5.0-chrome.zip`, `1.5.0-firefox.zip`, `1.5.0-thunderbird.xpi`. Version in **allen drei** Manifesten synchron erhöhen.
+### Automatisches Release (GitHub Action)
+
+`.github/workflows/release.yml` erstellt das GitHub-Release **automatisch**, wenn ein Commit auf `main` eine **neue Version** in `manifest.json` trägt (Tag existiert noch nicht):
+
+- **Trigger**: Push auf `main` (das Repo wird per Gitea-Push-Mirror nach GitHub synchronisiert — der Workflow läuft auf dem GitHub-Spiegel `github.com/s1t5/LLM-Text-Assistant`, Gitea synchronisiert bei jedem Commit)
+- **Tag/Release-Name** = Version exakt `x.y.z` (kein `v`-Präfix), identisch zum Artefakt-Schema
+- **Pakete werden frisch aus den Quellbäumen gepackt** (nicht die versionierten Staging-ZIPs in `Pub/` verwendet):
+  - Chrome: Repo-Root
+  - Firefox: `Pub/firefox-build/`
+  - Thunderbird: `Pub/thunderbird-build/`
+- **Pre-Flight-Checks** (brechen ab, bevor gepackt wird): `node --check` auf alle JS-Dateien, JSON-Validierung der drei Manifeste, Versionssync aller drei Manifeste, `de`/`en`-Locale-Key-Abgleich, Build-Dirs synchron zum Root (Ausnahme: `thunderbird-build/background.js` weicht bewusst ab — No-op `injectReplacement`)
+- Paket-Verifikation (Version im gepackten Manifest, `popup.html` im XPI) und Publish-Check (kein Draft) wie beim Obsidian-Plugin
+- **Fix-Commits ohne Version-Bump** überspringen den Release sauber („Tag existiert")
+
+Workflow manuell testen: GitHub → Actions → „Release browser extension" → **Run workflow** (`workflow_dispatch`).
+
+**Wichtig**: Da der Workflow auf dem GitHub-Spiegel läuft, erscheint das Release mit einer kurzen Verzögerung nach dem Gitea-Push (Spiegel-Sync bei jedem Commit, Intervall zusätzlich 8 h als Fallback).
+
+### Manueller Store-Upload
+
+Build-Artefakte liegen in `Pub/`. Benennungsschema: **`<version>-<target>.<endung>`** — also z. B. `1.5.0-chrome.zip`, `1.5.0-firefox.zip`, `1.5.0-thunderbird.xpi`. Version in **allen drei** Manifesten synchron erhöhen.
+
+Hinweis: Die versionierten ZIPs/XPI in `Pub/` sind manueller Staging-Bereich für Store-Uploads. Das automatische Release packt dieselben Dateien frisch aus den Quellbäumen — **nach Änderungen immer auch die Build-Dirs synchronisieren**, sonst bricht der Workflow beim Sync-Check ab (bewusst so, ein driftender Build-Dir würde alten Code releasen).
 
 ### Chrome (Chrome Web Store)
 

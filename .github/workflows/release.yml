@@ -1,0 +1,182 @@
+# Release browser extension
+#
+# Automatically creates a GitHub release with the three store packages
+# (Chrome zip, Firefox zip, Thunderbird xpi) whenever a push to main
+# carries a manifest.json version that has no matching tag yet.
+#
+# - Tag and release name equal the manifest version exactly (x.y.z, no
+#   "v" prefix), matching the artifact scheme <version>-<target>.<ext>.
+# - Packages are built FRESH from the source trees in the repo:
+#     Chrome:      repo root
+#     Firefox:    Pub/firefox-build/
+#     Thunderbird: Pub/thunderbird-build/
+#   The versioned copies under Pub/*.zip are manual staging for store
+#   uploads and are deliberately NOT used here.
+# - Build dirs are verified to be in sync with the root sources before
+#   packaging (a stale build dir would silently release old code).
+# - If the tag already exists (fixes pushed without a version bump),
+#   the job exits successfully without creating a duplicate release.
+#
+# Note: this repository is the Gitea push-mirror source; the workflow
+# runs on the GitHub mirror (github.com/s1t5/LLM-Text-Assistant), which
+# Gitea syncs on every commit.
+
+name: Release browser extension
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository (full history + tags)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect unreleased version
+        id: version
+        run: |
+          git fetch --tags --force
+          VERSION=$(jq -r '.version' manifest.json)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Manifest version: $VERSION"
+
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::manifest.json version '$VERSION' is not in x.y.z format"
+            exit 1
+          fi
+
+          if git rev-parse -q --verify "refs/tags/$VERSION" >/dev/null 2>&1; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Tag $VERSION already exists — nothing to release."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "New version $VERSION detected — building release."
+          fi
+
+      - name: Verify sources
+        if: steps.version.outputs.changed == 'true'
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          # JS syntax
+          for f in background.js content.js options.js \
+                   Pub/firefox-build/background.js Pub/firefox-build/content.js Pub/firefox-build/options.js \
+                   Pub/thunderbird-build/background.js Pub/thunderbird-build/content.js \
+                   Pub/thunderbird-build/options.js Pub/thunderbird-build/popup.js; do
+            node --check "$f" || { echo "::error::node --check failed for $f"; exit 1; }
+          done
+
+          # Manifests: valid JSON, all three at the same version
+          for m in manifest.json Pub/firefox-build/manifest.json Pub/thunderbird-build/manifest.json; do
+            jq -e . "$m" > /dev/null || { echo "::error::$m is not valid JSON"; exit 1; }
+            V=$(jq -r '.version' "$m")
+            if [ "$V" != "$VERSION" ]; then
+              echo "::error::$m has version $V, expected $VERSION — keep all three manifests in sync"
+              exit 1
+            fi
+          done
+
+          # Locale keys must match between de and en
+          diff <(jq -S 'keys' _locales/de/messages.json) <(jq -S 'keys' _locales/en/messages.json) \
+            || { echo "::error::_locales de/en key sets differ"; exit 1; }
+
+          # Build dirs must be in sync with the root sources.
+          # (thunderbird-build/background.js intentionally differs: no-op injectReplacement)
+          for f in background.js content.js options.js options.html; do
+            cmp -s "$f" "Pub/firefox-build/$f" \
+              || { echo "::error::Pub/firefox-build/$f is out of sync with the repo root — copy changed files into the build dir"; exit 1; }
+          done
+          for f in content.js options.js options.html; do
+            cmp -s "$f" "Pub/thunderbird-build/$f" \
+              || { echo "::error::Pub/thunderbird-build/$f is out of sync with the repo root — copy changed files into the build dir"; exit 1; }
+          done
+          diff -rq icons Pub/firefox-build/icons > /dev/null \
+            || { echo "::error::Pub/firefox-build/icons differs from the repo root"; exit 1; }
+          diff -rq _locales Pub/firefox-build/_locales > /dev/null \
+            || { echo "::error::Pub/firefox-build/_locales differs from the repo root"; exit 1; }
+          diff -rq icons Pub/thunderbird-build/icons > /dev/null \
+            || { echo "::error::Pub/thunderbird-build/icons differs from the repo root"; exit 1; }
+          diff -rq _locales Pub/thunderbird-build/_locales > /dev/null \
+            || { echo "::error::Pub/thunderbird-build/_locales differs from the repo root"; exit 1; }
+
+      - name: Package extension (Chrome / Firefox / Thunderbird)
+        if: steps.version.outputs.changed == 'true'
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          mkdir -p dist
+
+          # Chrome — packed from the repo root
+          zip -qr "dist/${VERSION}-chrome.zip" \
+            manifest.json background.js content.js options.html options.js icons _locales
+
+          # Firefox — packed from Pub/firefox-build (own manifest with gecko settings)
+          ( cd Pub/firefox-build && zip -qr "../../dist/${VERSION}-firefox.zip" \
+              manifest.json background.js content.js options.html options.js icons _locales )
+
+          # Thunderbird — packed from Pub/thunderbird-build (compose scripts + popup)
+          ( cd Pub/thunderbird-build && zip -qr "../../dist/${VERSION}-thunderbird.xpi" \
+              manifest.json background.js content.js popup.html popup.js options.html options.js icons _locales )
+
+      - name: Verify packages
+        if: steps.version.outputs.changed == 'true'
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          for f in "dist/${VERSION}-chrome.zip" "dist/${VERSION}-firefox.zip" "dist/${VERSION}-thunderbird.xpi"; do
+            test -f "$f" || { echo "::error::$f was not built"; exit 1; }
+            PKG_VERSION=$(unzip -p "$f" manifest.json | jq -r '.version')
+            if [ "$PKG_VERSION" != "$VERSION" ]; then
+              echo "::error::$f carries version $PKG_VERSION, expected $VERSION"
+              exit 1
+            fi
+          done
+
+          # The Thunderbird package must contain the compose toolbar popup
+          unzip -l "dist/${VERSION}-thunderbird.xpi" | grep -q "popup.html" \
+            || { echo "::error::popup.html missing in the Thunderbird package"; exit 1; }
+
+          echo "Packages verified:"
+          ls -l dist/
+
+      - name: Create release with assets
+        if: steps.version.outputs.changed == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          # --target creates the tag (named exactly like the version) on the
+          # pushed commit; the release is published with generated notes.
+          gh release create "$VERSION" \
+            --title="$VERSION" \
+            --target="$GITHUB_SHA" \
+            --generate-notes \
+            "dist/${VERSION}-chrome.zip" \
+            "dist/${VERSION}-firefox.zip" \
+            "dist/${VERSION}-thunderbird.xpi"
+
+      - name: Ensure release is published (not a draft)
+        if: steps.version.outputs.changed == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          # Safety net: if the release ended up as a draft for any reason,
+          # publish it explicitly so the packages are downloadable.
+          if [ "$(gh release view "$VERSION" --json isDraft -q .isDraft)" = "true" ]; then
+            echo "Release $VERSION was created as a draft — publishing it now."
+            gh release edit "$VERSION" --draft=false
+          fi
+          echo "Release $VERSION isDraft: $(gh release view "$VERSION" --json isDraft -q .isDraft)"
