@@ -11,7 +11,7 @@ Dieser Ordner enthält die **LLM Text Assistent** Browser-Erweiterung (Manifest 
 | `content.js` | Text-Ersetzung, schwebendes Icon, Chat-Fenster, Undo-Toast |
 | `options.html` / `options.js` | Einstellungsseite |
 | `_locales/` | i18n-Dateien (siehe unten) |
-| `Pub/` | Build-Artefakte (ZIPs, XPI, Firefox-/Thunderbird-Manifeste) |
+| `Pub/` | Quellbäume `firefox-build/`/`thunderbird-build/` mit den plattformspezifischen Manifesten — Packquellen für den Release-Workflow. Versionierte ZIPs/XPI werden **nicht mehr gebaut** (übernimmt die GitHub Action; die bis v1.5.7 vorhandenen sind historisch). |
 
 ## Thunderbird-Variante
 
@@ -29,23 +29,19 @@ Zusätzlich zur Chrome-/Firefox-Version gibt es eine **Thunderbird-Erweiterung**
 
 `content.js`, `options.*` und `_locales/` sind **ungeändert** aus der Firefox-Version übernommen — die Text-Ersetzung im Compose-Fenster (HTML-Body = `contenteditable`, Plaintext-Body = `textarea`, Betreff = `input`) nutzt die gleichen Pfade.
 
-### Zeilenumbruch-Regel (seit v1.5.6)
+### Zeilenumbruch-Verhalten (seit v1.5.7)
 
-Bei der **Selektions-Ersetzung** (Ergebnis wird inline zwischen Vorher/Nachher-Text eingefügt) kollabieren Zeilenumbrüche im LLM-Ergebnis zu einem einfachen Leerzeichen (`collapseSelectionLineBreaks` in `content.js`) — sonst würde ein mehrzeiliges Ergebnis den umgebenden Absatz zerreißen. Umbrüche am Anfang/Ende des Ergebnisses entfallen ganz.
+Zeilenumbrüche im LLM-Ergebnis werden **immer erhalten** — bei Selektion und Ganzfeld-Ersetzung gleichermaßen. Historie:
 
-Nur bei der **Ersetzung des gesamten Textfelds** (keine Selektion, Frozen-Modus, Chat „Übernehmen", `replaceFullText`) bleibt die Struktur des Modells (Absätze, Listen) erhalten.
+- **Regression in v1.5.5** (Framework-Editor-Support): Mehrzeilige Ergebnisse gingen bei der Selektions-Ersetzung durch ein einzelnes `execCommand('insertText')` mit eingebettetem `\n` — das fügt Umbrüche als **reinen Text** ein, der im HTML-Editor nicht als Umbruch rendert. Der alte Pfad (`finalizeCEMultiline`) setzte `<br>`-Knoten; deshalb funktionierte v1.5.3 noch (1.5.4 wurde nie veröffentlicht, Store sprang 1.5.3 → 1.5.5).
+- **v1.5.6** kollabierte die Umbrüche versehentlich aktiv zu Leerzeichen (Anforderung falsch verstanden) — in v1.5.7 vollständig revertiert.
+- **Fix in v1.5.7**: `execInsertTextCE` fügt mehrzeilige Ergebnisse zeilenweise ein und setzt zwischen den Zeilen einen echten Umbruch per `execCommand('insertLineBreak')` (→ `<br>`), mit Fallback auf `insertParagraph`, falls die Engine `insertLineBreak` nicht kennt. Der Editing-Pipeline-Weg bleibt (Framework-Editoren wie Lexical/ProseMirror revertieren direkte DOM-Writes).
 
-Regel-Implementation in drei Schichten — **alle zusammen ändern**:
-
-1. `content.js` → `collapseSelectionLineBreaks` (Helper), aufgerufen in `startSelectionReplacement.applyChunk` (nicht-Frozen) und `replaceSelectedText` (Legacy-Nachrichtenpfad `"replaceText"`)
-2. `background.js` (Root + `Pub/firefox-build/`) → `injectReplacement`-Fallback (kollabiert bei `!fullReplace` inline)
-3. Test: `test-collapse.js` (node) prüft die Helper-Regex
+Test: `test-insert-ce.js` (node) prüft die Kommando-Sequenz für Blink-, Gecko- und Legacy-Engine-Modelle (Multiline, Single-Line, Leerzeile, Empty-Payload).
 
 ### Build
 
-```bash
-cd Pub/thunderbird-build && zip -r ../<version>-thunderbird.xpi manifest.json background.js content.js popup.html popup.js options.html options.js icons _locales
-```
+XPI/ZIPs werden **nicht mehr manuell gebaut** — der Release-Workflow packt alle drei Pakete automatisch aus den Quellbäumen. Zum lokalen Testen (nicht für den Store!) die Dateien aus `Pub/thunderbird-build/` in Thunderbird über „Add-on aus Datei installieren" laden oder temporär packen.
 
 Installation: Thunderbird → Add-ons & Themes → Zahnrad → „Add-on aus Datei installieren" → `.xpi` wählen. Hinweis: Unsignierte XPIs akzeptiert nur die Release-Version von Thunderbird **nicht** standardmäßig — für dauerhafte Nutzung muss das Add-on über [addons.thunderbird.net](https://addons.thunderbird.net) signiert werden (oder in Daily/Beta bzw. mit `xpinstall.signatures.required=false` testen).
 
@@ -108,66 +104,30 @@ Kanonische Form: `[Ctrl+][Alt+][Shift+][Meta+]<Key>`
 - Shortcuts werden **nur ausgelöst**, wenn ein Textfeld (`INPUT`, `TEXTAREA`, `contenteditable`) fokussiert ist.
 - Das schwebende Menü zeigt konfigurierte Kürzel rechtsbündig neben dem Aktionsnamen an.
 
-## Veröffentlichen (Chrome & Firefox)
+## Veröffentlichen (alle drei Stores)
 
-### Automatisches Release (GitHub Action)
+### Release-Prinzip
 
-`.github/workflows/release.yml` erstellt das GitHub-Release **automatisch**, wenn ein Commit auf `main` eine **neue Version** in `manifest.json` trägt (Tag existiert noch nicht):
+**Manuell wird nur die Version erhöht — alles andere macht die GitHub Action.**
 
-- **Trigger**: Push auf `main` (das Repo wird per Gitea-Push-Mirror nach GitHub synchronisiert — der Workflow läuft auf dem GitHub-Spiegel `github.com/s1t5/LLM-Text-Assistant`, Gitea synchronisiert bei jedem Commit)
-- **Tag/Release-Name** = Version exakt `x.y.z` (kein `v`-Präfix), identisch zum Artefakt-Schema
-- **Pakete werden frisch aus den Quellbäumen gepackt** (nicht die versionierten Staging-ZIPs in `Pub/` verwendet):
-  - Chrome: Repo-Root
-  - Firefox: `Pub/firefox-build/`
-  - Thunderbird: `Pub/thunderbird-build/`
-- **Pre-Flight-Checks** (brechen ab, bevor gepackt wird): `node --check` auf alle JS-Dateien, JSON-Validierung der drei Manifeste, Versionssync aller drei Manifeste, `de`/`en`-Locale-Key-Abgleich, Build-Dirs synchron zum Root (Ausnahme: `thunderbird-build/background.js` weicht bewusst ab — No-op `injectReplacement`)
-- Paket-Verifikation (Version im gepackten Manifest, `popup.html` im XPI) und Publish-Check (kein Draft) wie beim Obsidian-Plugin
-- **Fix-Commits ohne Version-Bump** überspringen den Release sauber („Tag existiert")
+1. Version in **allen drei** Manifesten synchron erhöhen: `manifest.json`, `Pub/firefox-build/manifest.json`, `Pub/thunderbird-build/manifest.json`.
+2. Push auf `main`. Die GitHub Action (`.github/workflows/release.yml`, läuft auf dem GitHub-Spiegel `github.com/s1t5/LLM-Text-Assistant`, den Gitea per Push-Mirror synchronisiert) übernimmt:
+   - Pre-Flight-Checks: `node --check` auf alle JS-Dateien, JSON-Validierung und Versionssync aller drei Manifeste, `de`/`en`-Locale-Key-Abgleich, Build-Dirs synchron zum Root
+   - Paketierung aller drei Store-Pakete frisch aus den Quellbäumen (`<version>-chrome.zip` aus dem Root, `<version>-firefox.zip` aus `Pub/firefox-build/`, `<version>-thunderbird.xpi` aus `Pub/thunderbird-build/`)
+   - GitHub-Release (Tag/Name = Version, kein `v`-Präfix) mit den drei Paketen als Assets, veröffentlicht (kein Draft)
+3. Fix-Commits **ohne** Version-Bump überspringen den Release sauber („Tag existiert").
+4. Store-Uploads (Chrome Web Store, AMO, ATN) bleiben manuell: Pakete aus dem GitHub-Release herunterladen und in die Developer-Dashboards laden.
 
-Workflow manuell testen: GitHub → Actions → „Release browser extension" → **Run workflow** (`workflow_dispatch`).
+**Keine versionierten ZIPs/XPI mehr in `Pub/` bauen** — die bis v1.5.7 vorhandenen sind historisch; das Release liefert die verlässlichen Pakete.
 
-**Wichtig**: Da der Workflow auf dem GitHub-Spiegel läuft, erscheint das Release mit einer kurzen Verzögerung nach dem Gitea-Push (Spiegel-Sync bei jedem Commit, Intervall zusätzlich 8 h als Fallback).
+### Manueller Store-Upload (aus dem GitHub-Release)
 
-### Manueller Store-Upload
+Lade `<version>-chrome.zip` / `<version>-firefox.zip` / `<version>-thunderbird.xpi` aus dem jeweiligen GitHub-Release herunter:
 
-Build-Artefakte liegen in `Pub/`. Benennungsschema: **`<version>-<target>.<endung>`** — also z. B. `1.5.0-chrome.zip`, `1.5.0-firefox.zip`, `1.5.0-thunderbird.xpi`. Version in **allen drei** Manifesten synchron erhöhen.
+- **Chrome**: [Developer Dashboard](https://chrome.google.com/webstore/devconsole) → bestehendes Paket aktualisieren. Das Chrome-Manifest ist das im Repo-Root.
+- **Firefox (AMO)**: [addons.mozilla.org/developers](https://addons.mozilla.org/developers/) → bestehendes Add-on → neue Version hochladen. Firefox braucht das eigene Manifest aus `Pub/firefox-build/manifest.json` mit `browser_specific_settings.gecko.id` = `llm-text-assistent@s1t5.dev` (seit v1.5.0; ID-Mismatch lehnt AMO beim Review ab) und `data_collection_permissions.required: ["none"]`.
+- **Thunderbird (ATN)**: [addons.thunderbird.net](https://addons.thunderbird.net) → Developer-Seite → neue Version hochladen (eigene Gecko-ID `llm-text-assistent-thunderbird@s1t5.dev`).
 
-Hinweis: Die versionierten ZIPs/XPI in `Pub/` sind manueller Staging-Bereich für Store-Uploads. Das automatische Release packt dieselben Dateien frisch aus den Quellbäumen — **nach Änderungen immer auch die Build-Dirs synchronisieren**, sonst bricht der Workflow beim Sync-Check ab (bewusst so, ein driftender Build-Dir würde alten Code releasen).
+### Spiegel-Hinweis
 
-### Chrome (Chrome Web Store)
-
-```bash
-# Aus dem Repo-Root
-zip -r Pub/<version>-chrome.zip manifest.json background.js content.js options.html options.js icons _locales
-```
-
-- Upload: [Chrome Web Store Developer Dashboard](https://chrome.google.com/webstore/devconsole) → „Neues Element" bzw. bestehendes Paket aktualisieren → ZIP hochladen.
-- Das Chrome-`manifest.json` ist das im Repo-Root (mit `background.service_worker`).
-
-### Firefox (addons.mozilla.org, AMO)
-
-Firefox braucht ein eigenes Manifest mit `browser_specific_settings`:
-
-1. **`Pub/firefox-build/` aktualisieren**: geänderte Dateien aus dem Root hineinkopieren (`background.js`, `content.js`, `options.*`, `icons/`, `_locales/`).
-2. **Firefox-Manifest** liegt in `Pub/firefox-build/manifest.json` und unterscheidet sich vom Chrome-Root-Manifest durch:
-   - `background.scripts` zusätzlich zu `service_worker` (Fallback für ältere FF-Versionen)
-   - `browser_specific_settings.gecko.id` — **muss zur AMO-Add-on-ID passen**. Seit v1.5.0 lautet sie `llm-text-assistent@s1t5.dev` (früher: `llm-translator@s1t5.dev`; die alte ID wurde mit der Thunderbird-Veröffentlichung auf ATN belegt). Bei ID-Mismatch lehnt AMO beim Review ab.
-   - `browser_specific_settings.gecko.strict_min_version` (aktuell `109.0`)
-   - `browser_specific_settings.gecko.data_collection_permissions.required: ["none"]` — AMO-Pflicht zur Datenerklärung (hier: keine Datenerhebung, API-Calls gehen direkt an den vom Nutzer konfigurierten Endpunkt).
-3. **ZIP bauen** (aus `Pub/firefox-build/` heraus, nicht aus dem Root!):
-
-```bash
-cd Pub/firefox-build && zip -r ../<version>-firefox.zip manifest.json background.js content.js options.html options.js icons _locales
-```
-
-4. Upload: [addons.mozilla.org/developers](https://addons.mozilla.org/developers/) → bestehendes Add-on → neue Version hochladen.
-
-### Checks vor dem Upload
-
-```bash
-node --check background.js && node --check content.js && node --check options.js
-python3 -m json.tool manifest.json > /dev/null
-python3 -m json.tool Pub/firefox-build/manifest.json > /dev/null
-```
-
-Beide Manifeste: Versionsnummer identisch halten.
+Der Workflow läuft auf dem GitHub-Spiegel; das Release erscheint mit kurzer Verzögerung nach dem Gitea-Push (Spiegel-Sync je Commit, zusätzlich 8-h-Intervall als Fallback). **Voraussetzung**: Das hinterlegte GitHub-Token braucht die Scopes `repo` **und** `workflow` — sonst lehnt GitHub Pushes mit Workflow-Änderungen ab und der Spiegel bleibt stehen (passiert bei v1.5.6/1.5.7; im Gitea-WebUI unter Repository → Einstellungen → Mirrors im `last_error` sichtbar).
