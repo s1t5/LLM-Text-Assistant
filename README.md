@@ -89,6 +89,8 @@ Open the extension options (puzzle icon in the toolbar → **LLM Text Assistant*
 
 **Line breaks**: line breaks in the result are always preserved — for selections and for whole-field processing alike.
 
+**Editing after a replacement**: the caret is re-anchored right after the replaced text, and all streaming helper nodes (markers) are removed when the replacement completes — the field stays fully editable afterwards, including in Thunderbird's compose window (v1.5.8 fixed a caret-jumps-to-the-start bug there).
+
 ## 🔒 Privacy & Security Notes
 
 - **No data collection**: The extension collects nothing. API calls go directly from your browser to the endpoint you configured, there is no intermediate server

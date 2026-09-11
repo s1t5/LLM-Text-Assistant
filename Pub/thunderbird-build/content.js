@@ -891,8 +891,25 @@
   // deprecated but remains the only API that feeds beforeinput/input events
   // into these editors with the resulting text.
 
+  // Thunderbird detection: the compose body is a Gecko HTMLEditor that owns
+  // selection/transaction state exactly like a framework editor does — raw
+  // DOM writes desync its selection (caret jumps to the field start on the
+  // next keystroke). No property/class signal exists for it, so we identify
+  // the Thunderbird host by user agent.
+  function isThunderbirdUA(ua) {
+    try {
+      const s = (ua !== undefined && ua !== null) ? ua : (navigator.userAgent || '');
+      return /\bThunderbird\b/i.test(s);
+    } catch (e) {
+      return false;
+    }
+  }
+
   function isFrameworkManagedCE(el) {
     if (!el || !el.isContentEditable) return false;
+
+    // Thunderbird compose body: treated like a framework editor (see above).
+    if (isThunderbirdUA()) return true;
 
     // 1st signal: editor libraries attach recognizable properties to the
     // contenteditable host or expose the editor state on it.
@@ -1414,6 +1431,9 @@
       // order makes the final apply re-splice with stale original indices and
       // eats characters after the selection when the result is shorter.
       applyChunk(finalText || accumulated, true);
+      // Remove marker nodes / re-anchor the caret before dropping the state
+      // (finalizeCEState reads it). No-op for pipeline and range modes.
+      finalizeCEState(el);
       cleanedSelection.delete(el);
       showUndoToast();
       activeInputElement = el;
@@ -1436,6 +1456,9 @@
           const state = cleanedSelection.get(el);
           if (state) state.completed = true;
         }
+        // Clean up markers / re-anchor the caret for the partial result that
+        // is already in the field before dropping the state.
+        finalizeCEState(el);
         lastUndoState = null;
         showErrorNotification(err.message);
       },
@@ -1444,6 +1467,7 @@
         currentRequestId = null;
         if (accumulated.trim().length > 0) {
           applyChunk(accumulated, true);
+          finalizeCEState(el);
           cleanedSelection.delete(el);
           showUndoToast();
         } else {
@@ -1794,6 +1818,90 @@
     }
 
     el.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  // Completion cleanup for direct-write CE replacements (marker mode, frozen
+  // mode and the single-node streaming mode). The streaming state is dropped
+  // by the callers right afterwards — but two things would otherwise stay
+  // behind:
+  //   - the empty marker text nodes: they accumulate on every replacement
+  //     and ship into serialized content (in Thunderbird: the sent mail body)
+  //   - the live DOM selection still anchors at pre-replacement (or already
+  //     removed) nodes, which desyncs editors that own selection state —
+  //     the caret then jumps to the field start on the next keystroke
+  // This removes the markers and re-anchors the live selection right after
+  // the replaced text. No-op when the element has no streaming state (e.g.
+  // when the whole replacement went through the editing pipeline).
+  function finalizeCEState(el) {
+    if (!el || !el.isContentEditable) return;
+    const state = cleanedSelection.get(el);
+    if (!state) return;
+
+    const isEmptyText = (n) =>
+      n && n.nodeType === 3 && n.length === 0;
+
+    try {
+      if (state.ceStart && state.ceEnd &&
+          el.contains(state.ceStart) && el.contains(state.ceEnd)) {
+        const parent = state.ceStart.parentNode;
+        // The node right before the end marker is the tail of the result
+        // (everything between the markers is ours). Null when the result
+        // between the markers is empty.
+        const prev = state.ceEnd.previousSibling;
+        const lastContent = (prev && prev !== state.ceStart) ? prev : null;
+        // Range.insertNode splits the host text node when the selection
+        // started/ended inside one: an empty "before"/"after" fragment is
+        // left next to our markers (invisible, but it dirties the field and
+        // ships into serialized content). Our content is never an empty
+        // text node, so an empty text neighbor is always such a fragment.
+        const fragBefore = isEmptyText(state.ceStart.previousSibling)
+          ? state.ceStart.previousSibling : null;
+        const fragAfter = isEmptyText(state.ceEnd.nextSibling)
+          ? state.ceEnd.nextSibling : null;
+        if (fragBefore && fragBefore.parentNode) {
+          fragBefore.parentNode.removeChild(fragBefore);
+        }
+        const markerIndex = Array.prototype.indexOf.call(parent.childNodes, state.ceStart);
+        // Remove the markers themselves.
+        if (state.ceStart.parentNode) state.ceStart.parentNode.removeChild(state.ceStart);
+        if (state.ceEnd.parentNode) state.ceEnd.parentNode.removeChild(state.ceEnd);
+        if (fragAfter && fragAfter.parentNode) {
+          fragAfter.parentNode.removeChild(fragAfter);
+        }
+        const selection = window.getSelection();
+        const range = document.createRange();
+        if (lastContent) {
+          range.setStartAfter(lastContent);
+        } else {
+          // Empty result: keep the caret where the replaced selection was.
+          range.setStart(parent, Math.max(markerIndex, 0));
+        }
+        range.collapse(true);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        return;
+      }
+      if (state.node && el.contains(state.node)) {
+        // Single-node streaming mode: drop split fragments around the result
+        // node (same origin as above), anchor at its end.
+        const fragBefore = isEmptyText(state.node.previousSibling)
+          ? state.node.previousSibling : null;
+        const fragAfter = isEmptyText(state.node.nextSibling)
+          ? state.node.nextSibling : null;
+        if (fragBefore && fragBefore.parentNode) {
+          fragBefore.parentNode.removeChild(fragBefore);
+        }
+        if (fragAfter && fragAfter.parentNode) {
+          fragAfter.parentNode.removeChild(fragAfter);
+        }
+        const selection = window.getSelection();
+        const range = document.createRange();
+        range.setStart(state.node, state.node.length);
+        range.collapse(true);
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+    } catch (e) { /* ignore */ }
   }
 
   function getElementFullText(element) {
@@ -2332,6 +2440,30 @@
     }
   }
 
+  // Anchor the live DOM selection at the end of el's content. Used after raw
+  // innerHTML/innerText rewrites: the previous selection points at detached
+  // nodes, and editors that own selection state (framework editors,
+  // Thunderbird's HTMLEditor) would reset the caret to the field start on
+  // the next keystroke.
+  function anchorCaretAtEnd(el) {
+    try {
+      const selection = window.getSelection();
+      const range = document.createRange();
+      if (el.lastChild) {
+        if (el.lastChild.nodeType === 3) {
+          range.setStart(el.lastChild, el.lastChild.length);
+        } else {
+          range.setStartAfter(el.lastChild);
+        }
+      } else {
+        range.setStart(el, 0);
+      }
+      range.collapse(true);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    } catch (e) { /* ignore */ }
+  }
+
   function replaceFullTextInElement(el, newText) {
     if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
       // Check if element is still in DOM
@@ -2373,6 +2505,10 @@
       }
 
       el.innerText = newText;
+
+      // Re-anchor the live selection: innerText replaced every child node, so
+      // the previous selection points at detached nodes (see anchorCaretAtEnd).
+      anchorCaretAtEnd(el);
 
       el.dispatchEvent(new Event('input', { bubbles: true }));
     }
@@ -2592,6 +2728,9 @@
           ? state.originalText
           : '');
       }
+      // Re-anchor the caret after the raw innerHTML/innerText restore — the
+      // previous selection points at detached nodes (see anchorCaretAtEnd).
+      anchorCaretAtEnd(el);
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
       el.focus();

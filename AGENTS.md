@@ -39,6 +39,22 @@ Zeilenumbrüche im LLM-Ergebnis werden **immer erhalten** — bei Selektion und 
 
 Test: `test-insert-ce.js` (node) prüft die Kommando-Sequenz für Blink-, Gecko- und Legacy-Engine-Modelle (Multiline, Single-Line, Leerzeile, Empty-Payload).
 
+### Caret-/Marker-Cleanup nach Ersetzung (seit v1.5.8)
+
+**Symptom (Bug):** In Thunderbird war der ersetzte Text im Nachgang nicht mehr editierbar — der erste Tastendruck sprang mit dem Cursor an den Textanfang.
+
+**Ursachen (zwei, beide im Direct-Write-Pfad der ContentEditable-Ersetzung):**
+
+1. **Selection-Desync**: `finalizeCEMultiline`/`finalizeCEFrozen`/`replaceFullTextInElement` schreiben roh ins DOM (Range-Mutationen, `innerText`), setzen danach aber die Live-Selection **nie** neu. Der Gecko-HTMLEditor des Compose-Fensters besitzt eigenen Selection-/Transaktions-State wie ein Framework-Editor — beim nächsten Tastendruck re-adressiert er die verwaiste Selection und landet am Feldanfang.
+2. **Marker-Knoten akkumulieren**: der Streaming-Marker-Modus (`ceStart`/`ceEnd`, leere Textknoten) wird nur aus der WeakMap gelöscht, nie aus dem DOM — pro Ersetzung bleiben 2 leere Knoten (+ Range-Split-Fragmente) im Mail-Body, die auch serialisiert versendet wurden.
+
+**Fix (v1.5.8), zweiteilig:**
+
+- **Thunderbird-Pipeline**: `isThunderbirdUA()` (UA-Sniff, testbar via Parameter) macht `isFrameworkManagedCE()` im TB-Compose true → alle Writes laufen über `execInsertTextCE` (Editor-Transaktionen, Selection bleibt konsistent). Firefox/Chrome ohne Framework-Signale nehmen weiterhin die Direct-Write-Pfade.
+- **`finalizeCEState(el)`** (Defense in depth, wird in `finish`/`onError`/`onAborted` vor `cleanedSelection.delete` aufgerufen): entfernt Marker- **und** Range-Split-Fragmente (leere Textknoten), re-anchort die Live-Selection ans Ende des Ergebnisses (bzw. an die alte Selektionsstelle bei Leer-Ergebnis). `anchorCaretAtEnd()` deckt zusätzlich Ganzfeld (`innerText`) und Undo-Restore (`innerHTML`) ab.
+
+Test: `test-ce-finalize.js` (node) — UA-Erkennung, Pipeline-Routing und Cleanup (Marker-/Fragment-Entfernung, Caret-Positionen für Marker-, Leer- und Single-Node-Modus, No-Op ohne State). jsdom-Endzustands-Verifikation: `~/workspace/llm-tb-caret-debug/run-harness-e2e.js` (außerhalb des Repos, Nachweis 0 leere Knoten über 3 Läufe inkl. Wiederholungsersetzung).
+
 ### Build
 
 XPI/ZIPs werden **nicht mehr manuell gebaut** — der Release-Workflow packt alle drei Pakete automatisch aus den Quellbäumen. Zum lokalen Testen (nicht für den Store!) die Dateien aus `Pub/thunderbird-build/` in Thunderbird über „Add-on aus Datei installieren" laden oder temporär packen.
