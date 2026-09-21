@@ -55,6 +55,19 @@ Test: `test-insert-ce.js` (node) prüft die Kommando-Sequenz für Blink-, Gecko-
 
 Test: `test-ce-finalize.js` (node) — UA-Erkennung, Pipeline-Routing und Cleanup (Marker-/Fragment-Entfernung, Caret-Positionen für Marker-, Leer- und Single-Node-Modus, No-Op ohne State). jsdom-Endzustands-Verifikation: `~/workspace/llm-tb-caret-debug/run-harness-e2e.js` (außerhalb des Repos, Nachweis 0 leere Knoten über 3 Läufe inkl. Wiederholungsersetzung).
 
+### Gestapelte Text-Kopien bei Ganzfeld-Ersetzung (Fix seit v1.5.9)
+
+**Symptom (Bug):** In Thunderbird füllte sich der Mail-Body bei einer Aktion auf den gesamten Text mit wiederholten, von hinten schrumpfenden Kopien des Textes (jede Kopie endete einen Token früher; der korrekte finale Text stand am Ende).
+
+**Ursache:** Das Ganzfeld-Streaming schrieb bei jedem Token den kompletten Text neu — pro Token Select-All + `insertText` über die Editor-Pipeline (`execSetCEText`). Wenn die interne Selection des HTMLEditor veraltet war (z. B. nach dem Fokus-Wechsel durch das Compose-Toolbar-Popup), behandelte die Engine das Insert als Einfügen am Caret statt als Ersetzen: pro Token stapelte sich ein vollständiger Snapshot. Seit v1.5.8 routet TB alle CE-Writes über diese Pipeline, deshalb trat das Muster erst danach auf ("manchmal" — nur bei Aktionen ohne Auswahl; Selektionen puffern bereits bis zum Ende).
+
+**Fix (v1.5.9), dreiteilig:**
+- **Ganzfeld-Streaming gepuffert**: `startFullTextReplacement` schreibt bei Framework-/TB-Editoren (`isFrameworkManagedCE`, inkl. UA-Check) nur EINMAL am Stream-Ende (`finish`/`onAborted`) statt pro Token. Normale CE-Felder behalten das Live-Streaming (billiges `innerText`-Schreiben ohne Editor-State).
+- **`applyChunk` (Framework-Zweig) einheitlich**: auch der Frozen-Modus (Selektion ohne Range) schreibt nur noch am Ende — kein per-Token Select-All mehr über `applyChunk`.
+- **`execSetCEText` gehärtet**: nach Select-All + `insertText` wird verifiziert, dass das Feld wirklich nur den neuen Text enthält. Falls die Engine eingefügt statt ersetzt hat (alter Content bleibt stehen), folgt ein Pipeline-Delete + ein Retry; scheitert auch das, Rückgabe `false` → Aufrufer fällt auf Direct-Write-Pfade zurück. Test: `test-exec-set-ce.js` (Replace-Engine ohne Korrekturschritt, Stack-Engine mit Detektion+Retry, Broken-Engine → `false`).
+
+Wirkung: Selektions- wie Ganzfeld-Aktionen in Thunderbird landen in genau einem Editor-Write; das Stapel-Muster kann nicht mehr entstehen.
+
 ### Build
 
 XPI/ZIPs werden **nicht mehr manuell gebaut** — der Release-Workflow packt alle drei Pakete automatisch aus den Quellbäumen. Zum lokalen Testen (nicht für den Store!) die Dateien aus `Pub/thunderbird-build/` in Thunderbird über „Add-on aus Datei installieren" laden oder temporär packen.

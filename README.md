@@ -91,6 +91,8 @@ Open the extension options (puzzle icon in the toolbar → **LLM Text Assistant*
 
 **Editing after a replacement**: the caret is re-anchored right after the replaced text, and all streaming helper nodes (markers) are removed when the replacement completes — the field stays fully editable afterwards, including in Thunderbird's compose window (v1.5.8 fixed a caret-jumps-to-the-start bug there).
 
+**Streaming in Thunderbird / framework editors** (v1.5.9): results are written to the field in a single pass on completion instead of rewriting the whole field per token. Previously, per-token select-all rewrites through the editor pipeline could stack partial snapshots of the text when the editor's selection state was stale (observed in Thunderbird's compose window as repeated, shrinking copies of the mail text).
+
 ## 🔒 Privacy & Security Notes
 
 - **No data collection**: The extension collects nothing. API calls go directly from your browser to the endpoint you configured, there is no intermediate server

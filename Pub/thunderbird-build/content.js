@@ -1042,17 +1042,52 @@
     return false;
   }
 
-  // Insert at cursor / replace whole field via the editing pipeline. Used for
-  // full-text replacement in framework editors.
+  // Whole-field write via the editing pipeline. Select-all + insertText is
+  // normally an atomic replace, but engines with stale internal selection
+  // state can treat it as an insert at the caret — the old content then
+  // remains in the field next to the new text (observed in Thunderbird's
+  // compose body: the field filled with stacked copies of the streamed
+  // result). Verify the replacement really landed; if the engine left
+  // content behind, force a pipeline delete and insert once more.
   function execSetCEText(el, text) {
+    const normalize = (s) =>
+      String(s).replace(/\r/g, "").replace(/^\n+|\n+$/g, "");
     // Whole field: select everything, then insert over it.
     const all = document.createRange();
     all.selectNodeContents(el);
-    if (execInsertTextCE(el, all, text)) return true;
+    if (execInsertTextCE(el, all, text)) {
+      if (normalize(getElementFullText(el)) === normalize(text)) return true;
+      // The engine inserted without replacing: clear the field through the
+      // pipeline, then insert the text once at the empty caret.
+      if (!execDeleteCEContents(el)) return false;
+      const emptyRange = document.createRange();
+      emptyRange.selectNodeContents(el);
+      emptyRange.collapse(true);
+      if (execInsertTextCE(el, emptyRange, text) &&
+          normalize(getElementFullText(el)) === normalize(text)) {
+        return true;
+      }
+      return false;
+    }
 
     // Some editors reject full-select inserts; try replacing only the
     // current caret line contents, else give up and let the caller know.
     return false;
+  }
+
+  // Select the whole field content through the editing pipeline and delete it.
+  function execDeleteCEContents(el) {
+    try {
+      el.focus();
+      const all = document.createRange();
+      all.selectNodeContents(el);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(all);
+      return document.execCommand("delete", false, null);
+    } catch (e) {
+      return false;
+    }
   }
 
   function getOrCreatePort() {
@@ -1243,6 +1278,18 @@
     let accumulated = "";
     let cleaned = false;
 
+    // Framework-managed contenteditables (incl. Thunderbird's compose body,
+    // see isFrameworkManagedCE) get ONE write at completion instead of a
+    // full-field rewrite per token. Each per-token snapshot runs select-all +
+    // insertText through the editor pipeline; when the engine's selection
+    // state is stale it inserts next to the previous snapshot instead of
+    // replacing it — every token then stacks a full copy of the text
+    // generated so far (observed in Thunderbird: the field filled with
+    // shrinking snapshots of the same text, newest first, final text last).
+    // Plain CE fields keep the live per-token streaming (cheap innerText
+    // writes there, no editor state to desync).
+    const bufferStream = el.isContentEditable && isFrameworkManagedCE(el);
+
     const finish = (finalText) => {
       hideProcessingIndicator();
       currentRequestId = null;
@@ -1256,6 +1303,7 @@
     const requestId = startActionStream(textAction, text, true, {
       onToken: (token) => {
         accumulated += token;
+        if (bufferStream) return;
         if (!cleaned && accumulated.trim().length > 0) {
           // Clear the original text as soon as real content arrives
           replaceFullTextInElement(el, accumulated);
@@ -1382,17 +1430,15 @@
     const applyChunk = (newText, isFinal) => {
       if (frameworkCE) {
         // Framework editors revert direct DOM writes, so all writes go through
-        // the editing pipeline. Frozen mode can stream whole-field rewrites;
-        // a live selection is replaced once at the end, because re-inserting
-        // per chunk over the original range boundaries would corrupt content.
-        if (isCE && !isFinal) return;
+        // the editing pipeline. Buffer everything and write once at the end:
+        // per-token select-all + insertText snapshots can stack copies when
+        // the engine's selection state is stale (see startFullTextReplacement).
+        if (!isFinal) return;
         if (isCE && sel.range && rangeIsWithin(sel.range, el) &&
             execInsertTextCE(el, sel.range, newText)) {
           return;
         }
-        const allRange = document.createRange();
-        allRange.selectNodeContents(el);
-        if (execInsertTextCE(el, allRange, newText)) return;
+        if (execSetCEText(el, newText)) return;
         finalizeCEFrozen(el, newText);
         return;
       }
