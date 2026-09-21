@@ -93,6 +93,8 @@ Open the extension options (puzzle icon in the toolbar → **LLM Text Assistant*
 
 **Streaming in Thunderbird / framework editors** (v1.5.9): results are written to the field in a single pass on completion instead of rewriting the whole field per token. Previously, per-token select-all rewrites through the editor pipeline could stack partial snapshots of the text when the editor's selection state was stale (observed in Thunderbird's compose window as repeated, shrinking copies of the mail text).
 
+**Multi-line selections** (v1.5.10): the selected text in rich-text fields is read with its line breaks intact — results keep the original line structure instead of coming back as a single line (a regression since v1.5.0 where `Range.toString()` dropped breaks at `<br>`/block boundaries).
+
 ## 🔒 Privacy & Security Notes
 
 - **No data collection**: The extension collects nothing. API calls go directly from your browser to the endpoint you configured, there is no intermediate server

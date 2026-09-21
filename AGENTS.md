@@ -68,6 +68,16 @@ Test: `test-ce-finalize.js` (node) — UA-Erkennung, Pipeline-Routing und Cleanu
 
 Wirkung: Selektions- wie Ganzfeld-Aktionen in Thunderbird landen in genau einem Editor-Write; das Stapel-Muster kann nicht mehr entstehen.
 
+### Fehlende Zeilenumbrüche bei Selektions-Ersetzung (Fix seit v1.5.10)
+
+**Symptom (Bug):** In Chrome wurden bei der Ersetzung einer mehrzeiligen Selektion die Zeilenumbrüche verworfen — das Ergebnis landete als eine Zeile im Feld (bereits seit v1.5.0, unabhängig vom v1.5.9-Fix).
+
+**Ursache:** `getElementSelection` las den CE-Selektionstext per `range.toString()`. Laut DOM-Standard konkateniert das nur Textnodes — **ohne** `\n` an `<br>`- oder Blockgrenzen (anders: `Selection.toString()`). Mehrzeilige Selektionen erreichten das LLM also als eine Zeile, das Ergebnis entsprechend auch. Umstellung erfolgte in Commit `8cb1132`.
+
+**Fix (v1.5.10):** `selection.toString()` statt `range.toString()` in `getElementSelection` (CE-Zweig).
+
+**Merkregel:** Der **Quelltext** einer Selektion (LLM-Input) muss Zeilenumbrüche enthalten — immer `selection.toString()` (oder INPUT/TEXTAREA-Substring). `range.toString()` niemals für Quelltext verwenden; nur wo bewusst nur sichtbarer Fließtext ohne Umbrüche gebraucht wird.
+
 ### Build
 
 XPI/ZIPs werden **nicht mehr manuell gebaut** — der Release-Workflow packt alle drei Pakete automatisch aus den Quellbäumen. Zum lokalen Testen (nicht für den Store!) die Dateien aus `Pub/thunderbird-build/` in Thunderbird über „Add-on aus Datei installieren" laden oder temporär packen.

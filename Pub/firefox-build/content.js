@@ -1235,7 +1235,12 @@
       return {
         mode: 'ce',
         range: range.cloneRange(),
-        text: range.toString(),
+        // Selection.toString() renders line breaks as "\n" (at <br> and at
+        // block boundaries); Range.toString() concatenates text nodes only,
+        // which silently stripped line breaks from multi-line selections —
+        // the LLM then returned single-line results that were inserted
+        // without breaks (regression since 8cb1132, fixed in v1.5.10).
+        text: selection.toString(),
         posBefore: document.activeElement === el
       };
     }
