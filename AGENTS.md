@@ -78,6 +78,18 @@ Wirkung: Selektions- wie Ganzfeld-Aktionen in Thunderbird landen in genau einem 
 
 **Merkregel:** Der **Quelltext** einer Selektion (LLM-Input) muss Zeilenumbrüche enthalten — immer `selection.toString()` (oder INPUT/TEXTAREA-Substring). `range.toString()` niemals für Quelltext verwenden; nur wo bewusst nur sichtbarer Fließtext ohne Umbrüche gebraucht wird.
 
+### Free Prompt öffnet kein Fenster in Thunderbird (Fix seit v1.5.11)
+
+**Symptom (Bug):** In Thunderbird öffnete der „Free prompt"-Eintrag im Compose-Toolbar-Popup kein Chat-Fenster — der bestehende Mailtext wurde stattdessen direkt ersetzt.
+
+**Ursache:** Das Compose-Toolbar-Popup kann den Compose-Tab nicht direkt message'n (kein Tab-Kontext), daher leitet `background.js` den Klick als `composePopupTrigger` weiter — und `background.js` routet das als `{ action: "contextMenuProcess" }` an den Content-Script. Der `contextMenuProcess`-Handler in `content.js` kannte aber nur den Browser-Kontextmenü-Pfad (Selektions-Ersetzung) und schickte `textAction === "freePrompt"` ungeprüft in die **Ganzfeld-Ersetzungs-Pipeline** — deshalb Mailtext-Ersatz statt Chat. Im Browser trat der Bug nicht auf: dort kommt freePrompt ausschließlich über das Floating-Icon-Menü (direkt `openFreePromptChat()`) oder den Shortcut — der Browser-Kontextmenü bietet freePrompt nie an.
+
+**Fix (v1.5.11), im `contextMenuProcess`-Handler:** `textAction === "freePrompt"` short-circuitet vor der Ersetzungs-Pipeline: `uiSuspended = false` (Chat darf sich nach abgebrochenem Send wieder öffnen), Ziel-Feld per `resolveFreePromptTarget()` bestimmen, dann `openFreePromptChat()` — nie `handleContextMenuProcess()`.
+
+**`resolveFreePromptTarget(live, remembered)`** (testbar extrahierbar): während das Toolbar-Popup offen ist, liegt der Fokus außerhalb des Compose-Dokuments, `document.activeElement` ist dann `<body>` — Priority daher wie in `handleContextMenuProcess`: aktives Textfeld zuerst, dann das zuletzt fokussierte Feld (`activeInputElement`), sonst `null` (Chat verweigert das Öffnen sauber — `openFreePromptChat()` gibt ohne `activeInputElement` leise auf, es wird **nie** ersetzt).
+
+Test: `test-free-prompt-route.js` (node) — Routing-Priority (Body/Live/Remembered/Null-Kombinationen) + Struktur-Check, dass der Guard im Handler vor der Pipeline liegt und den Chat öffnet.
+
 ### Build
 
 XPI/ZIPs werden **nicht mehr manuell gebaut** — der Release-Workflow packt alle drei Pakete automatisch aus den Quellbäumen. Zum lokalen Testen (nicht für den Store!) die Dateien aus `Pub/thunderbird-build/` in Thunderbird über „Add-on aus Datei installieren" laden oder temporär packen.

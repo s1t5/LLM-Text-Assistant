@@ -300,6 +300,18 @@
       suspendUi();
       sendResponse({ success: true });
     } else if (request.action === "contextMenuProcess") {
+      // Free prompt: open the chat window, do NOT run the replacement
+      // pipeline (Thunderbird's compose toolbar routes freePrompt through
+      // this message; the browser context menu never offers it).
+      if (request.textAction === "freePrompt") {
+        uiSuspended = false;
+        const target = resolveFreePromptTarget(
+          document.activeElement, activeInputElement);
+        if (target) activeInputElement = target;
+        openFreePromptChat();
+        sendResponse({ success: true });
+        return true;
+      }
       // Context menu selection replacement, handled with streaming via port.
       handleContextMenuProcess(request.textAction, request.text, request.selectionInfo)
         .then(() => sendResponse({ success: true }))
@@ -369,6 +381,21 @@
       return textTypes.includes((el.type || 'text').toLowerCase());
     }
     return false;
+  }
+
+  // Pick the field a free-prompt chat should be attached to. Called from the
+  // contextMenuProcess handler, which Thunderbird uses for the compose
+  // toolbar popup (the browser context menu never offers freePrompt).
+  // While the toolbar popup is open the focus sits outside the compose
+  // document, so the live active element is often <body> — the last focused
+  // field wins in that case. Priority mirrors handleContextMenuProcess:
+  // live active element first, then the remembered field, then null
+  // (openFreePromptChat() then declines to open, no replacement is ever run).
+  function resolveFreePromptTarget(liveActiveElement, rememberedElement) {
+    const usable = (node) => node && isTextInput(node);
+    if (usable(liveActiveElement)) return liveActiveElement;
+    if (usable(rememberedElement)) return rememberedElement;
+    return null;
   }
 
   function onElementFocus(e) {

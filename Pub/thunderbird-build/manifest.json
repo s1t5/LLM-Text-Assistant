@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "__MSG_extensionName__",
-  "version": "1.5.10",
+  "version": "1.5.11",
   "description": "__MSG_extensionDescription__",
   "default_locale": "de",
   "permissions": [
@@ -13,7 +13,9 @@
     "<all_urls>"
   ],
   "background": {
-    "scripts": ["background.js"]
+    "scripts": [
+      "background.js"
+    ]
   },
   "compose_action": {
     "default_title": "__MSG_contextMenuParent__",
@@ -33,7 +35,9 @@
       "id": "llm-text-assistent-thunderbird@s1t5.dev",
       "strict_min_version": "128.0",
       "data_collection_permissions": {
-        "required": ["none"]
+        "required": [
+          "none"
+        ]
       }
     }
   },
