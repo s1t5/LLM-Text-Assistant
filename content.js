@@ -334,6 +334,13 @@
     // every mutation (expensive on SPA sites).
     document.addEventListener('focusin', handleFocusIn, true);
 
+    // Frame focus tracking (all_frames): when focus moves to another frame,
+    // this frame never sees a click that would hide the icon — hide it on
+    // window blur instead. activeInputElement is kept: the Thunderbird
+    // toolbar popup and context-menu flows rely on the last focused field
+    // while the compose frame itself is blurred.
+    window.addEventListener('blur', hideFloatingIcon);
+
     // A field may already hold focus when the script runs (e.g. Thunderbird
     // compose windows inject after load). Track it so shortcuts and the
     // toolbar popup work — but do not force the floating icon, matching the

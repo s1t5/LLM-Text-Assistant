@@ -181,7 +181,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       sendResponse({ success: false, error: "sender.tab is undefined" });
       return;
     }
-    processTextNonStreaming(request.textAction, request.text, sender.tab, true)
+    processTextNonStreaming(request.textAction, request.text, sender.tab, true, sender.frameId)
       .then(() => sendResponse({ success: true }))
       .catch((err) => sendResponse({ success: false, error: err.message }));
     return true; // Keep channel open for async response
@@ -193,7 +193,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       sendResponse({ success: false, error: "sender.tab is undefined" });
       return;
     }
-    processTextNonStreaming(request.textAction, request.text, sender.tab, false)
+    processTextNonStreaming(request.textAction, request.text, sender.tab, false, sender.frameId)
       .then(() => sendResponse({ success: true }))
       .catch((err) => sendResponse({ success: false, error: err.message }));
     return true;
@@ -281,7 +281,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   // (which made follow-up replacements hit the wrong range).
   try {
     const results = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
+      target: { tabId: tab.id, frameIds: [info.frameId] },
       func: () => {
         const el = document.activeElement;
         if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA")) {
@@ -315,13 +315,16 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   // Context-menu path: streaming not possible without the content-script port,
   // so use a sendMessage-based streaming bridge: content.js opens the port.
   // Here we fall back to non-streaming if the content script cannot be reached.
+  // The message must reach the frame the click happened in (info.frameId) —
+  // with all_frames the script runs in every iframe (Teams, embedded editors),
+  // and the top frame would otherwise swallow the action.
   try {
     chrome.tabs.sendMessage(tab.id, {
       action: "contextMenuProcess",
       textAction: info.menuItemId,
       text: selectedText,
       selectionInfo: selectionInfo
-    }, (response) => {
+    }, { frameId: info.frameId }, (response) => {
       if (chrome.runtime.lastError || !response || !response.success) {
         // Fallback: process directly and inject the result
         processTextNonStreaming(info.menuItemId, selectedText, tab).catch((err) => {
@@ -517,7 +520,7 @@ function networkErrorMessage() {
 
 // --- Non-streaming (legacy/fallback) processing ---
 
-async function processTextNonStreaming(action, text, tab, isFullText = false) {
+async function processTextNonStreaming(action, text, tab, isFullText = false, frameId) {
   const config = await storageGet(DEFAULT_KEYS);
   const controller = new AbortController();
   const messages = await buildPromptParts(action, text, config);
@@ -536,13 +539,16 @@ async function processTextNonStreaming(action, text, tab, isFullText = false) {
       const processedText = data.choices[0].message.content;
       const messageAction = isFullText ? "replaceFullText" : "replaceText";
 
+      // Route back into the frame the request came from (undefined = top
+      // frame, e.g. when invoked via the context menu fallback path).
+      const sendOpts = (frameId !== undefined) ? { frameId } : undefined;
       chrome.tabs.sendMessage(tab.id, {
         action: messageAction,
         text: processedText
-      }, () => {
+      }, sendOpts, () => {
         if (chrome.runtime.lastError) {
           console.warn("Content script not available, using fallback");
-          injectReplacement(tab.id, processedText, messageAction === "replaceFullText");
+          injectReplacement(tab.id, processedText, messageAction === "replaceFullText", frameId);
         }
       });
     } else {
@@ -551,10 +557,13 @@ async function processTextNonStreaming(action, text, tab, isFullText = false) {
   } catch (error) {
     console.error("LLM API Fehler:", error);
     if (tab && tab.id) {
+      // Error toast goes to the requesting frame; fall back to the top
+      // frame when the request did not carry one (context-menu fallback).
+      const errSendOpts = (frameId !== undefined) ? { frameId } : undefined;
       chrome.tabs.sendMessage(tab.id, {
         action: "showError",
         message: error.message
-      }, () => {
+      }, errSendOpts, () => {
         if (chrome.runtime.lastError) {
           console.error("Could not notify content script:", chrome.runtime.lastError);
         }
@@ -752,9 +761,11 @@ async function loadActionsForContent() {
 
 // --- Fallback: inject replacement code directly if content script is unreachable ---
 
-function injectReplacement(tabId, replacementText, replaceFull = false) {
+function injectReplacement(tabId, replacementText, replaceFull = false, frameId) {
+  const target = { tabId: tabId };
+  if (frameId !== undefined) target.frameIds = [frameId];
   chrome.scripting.executeScript({
-    target: { tabId: tabId },
+    target: target,
     func: (newText, fullReplace) => {
       const activeElement = document.activeElement;
       if (!activeElement) return;

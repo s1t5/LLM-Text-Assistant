@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "__MSG_extensionName__",
-  "version": "1.5.12",
+  "version": "1.5.13",
   "description": "__MSG_extensionDescription__",
   "default_locale": "de",
   "permissions": [
@@ -24,7 +24,9 @@
       "js": [
         "content.js"
       ],
-      "run_at": "document_end"
+      "run_at": "document_end",
+      "all_frames": true,
+      "match_about_blank": true
     }
   ],
   "options_ui": {
