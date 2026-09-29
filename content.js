@@ -1145,7 +1145,6 @@
           normalize(getElementFullText(el)) === normalize(text)) {
         return true;
       }
-      return false;
     }
 
     // Some editors reject full-select inserts; try replacing only the
@@ -1163,6 +1162,169 @@
       selection.removeAllRanges();
       selection.addRange(all);
       return document.execCommand("delete", false, null);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // =====================================================================
+  //  PASTE-BASED WRITES FOR FRAMEWORK EDITORS (browsers)
+  // =====================================================================
+  // Model-owning editors (CKEditor 5 in Teams, Draft.js, Lexical, …) do NOT
+  // take execCommand('insertText') writes into their model: CKEditor consumes
+  // the DOM change, then reverts it on its next render cycle (the DOM
+  // readback cannot see the model — the write looks successful and silently
+  // disappears); Draft.js re-renders after every execCommand and mangles
+  // multi-line insert sequences. The ONE input path every editor natively
+  // rebuilds its model from is PASTE: the paste handler reads the
+  // DataTransfer in a single transaction.
+  // CKEditor & co. also convert DOM selections into model selections only
+  // ASYNCHRONOUSLY (selection observer, ~60-200 ms debounce) — so: select,
+  // pause, paste, verify, one retry, then fall back to the sync pipeline.
+  // Thunderbird keeps the proven sync pipeline (isThunderbirdUA) — its
+  // compose editor has no paste-based model to update.
+
+  // Invalidate token: bumped whenever a new action starts or undo restores,
+  // so scheduled paste writes of a previous action never land on top of
+  // newer user intent.
+  let pasteWriteToken = 0;
+
+  // Fire-and-forget framework write. `optRange` = the selection to replace
+  // (live range), null = whole field. Staged chain, each step verified before
+  // the next — a step that already landed stops the chain, a mis-placed
+  // result is cleaned up by the next stage instead of stacked upon:
+  //   0. sync editing pipeline write (works for Draft.js/Lexical/ProseMirror)
+  //      → delayed gate (350 ms): catches the CKEditor/Teams async revert
+  //      (the DOM shows the write, the editor's model never took it, the
+  //      next render cycle restores the old text)
+  //   1. paste over a DOM select-all, after a pause for the framework's
+  //      async selection observer (CKEditor converts DOM selections into
+  //      model selections only debounced — proven with real CKEditor 5)
+  //   2. recovery: pipeline delete-all (clears pipeline-accepting models),
+  //      then paste at the collapsed caret
+  //   3. last resort: final sync pipeline write (undo toast protects the user)
+  // The token cancels the whole chain the moment a new action or undo runs.
+  function scheduleFrameworkPasteWrite(el, newText, optRange, beforeText, attempt) {
+    const myToken = ++pasteWriteToken;
+    const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+    const wholeField = !optRange;
+    const verify = () => {
+      try {
+        const full = norm(getElementFullText(el));
+        if (wholeField) return full === norm(newText);
+        return full !== norm(beforeText) && full.indexOf(norm(newText)) !== -1;
+      } catch (e) {
+        return true; // cannot read -> assume success, do not double-write
+      }
+    };
+    const selectTarget = () => {
+      try {
+        el.focus();
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        let r = null;
+        if (optRange && rangeIsWithin(optRange, el)) r = optRange;
+        if (!r) {
+          r = document.createRange();
+          r.selectNodeContents(el);
+        }
+        selection.addRange(r);
+      } catch (e) { /* ignore */ }
+    };
+    const pipelineWrite = () => {
+      try {
+        if (optRange && rangeIsWithin(optRange, el)) {
+          return execInsertTextCE(el, optRange, newText);
+        }
+        return execSetCEText(el, newText);
+      } catch (e) {
+        return false;
+      }
+    };
+    const pasteAtCaret = () => {
+      try {
+        return dispatchPasteCE(el, newText);
+      } catch (e) {
+        return false;
+      }
+    };
+
+    const stage = (n) => {
+      if (myToken !== pasteWriteToken || !isNodeInDocument(el)) return;
+      if (verify()) return; // landed — stop the chain
+      if (n === 0) {
+        // Sync pipeline write. Its immediate DOM readback CANNOT be trusted
+        // for model-owning editors (the model may revert it later) — the
+        // delayed gate below is the real verdict.
+        pipelineWrite();
+        setTimeout(() => stage(1), 350);
+        return;
+      }
+      if (n === 1) {
+        // Paste over a DOM select-all: select, pause (async selection
+        // observer), re-assert, paste, gate.
+        selectTarget();
+        setTimeout(() => {
+          if (myToken !== pasteWriteToken || !isNodeInDocument(el)) return;
+          if (verify()) return;
+          selectTarget(); // frameworks re-render during the pause
+          if (!pasteAtCaret()) {
+            console.warn("[LLM Content] Synthetic paste unavailable, using editing pipeline");
+            pipelineWrite();
+            setTimeout(() => stage(3), 300);
+            return;
+          }
+          setTimeout(() => stage(2), 400);
+        }, 350);
+        return;
+      }
+      if (n === 2) {
+        // Recovery: clear the field through the pipeline (models that take
+        // pipeline writes are now empty and their caret collapsed at the
+        // start), then paste the full text at that caret.
+        try { execDeleteCEContents(el); } catch (e) { /* ignore */ }
+        setTimeout(() => {
+          if (myToken !== pasteWriteToken || !isNodeInDocument(el)) return;
+          if (verify()) return;
+          if (!pasteAtCaret()) {
+            pipelineWrite(); // restore at least the text
+            return;
+          }
+          setTimeout(() => stage(3), 400);
+        }, 150);
+        return;
+      }
+      // n === 3: chain exhausted. Leave whatever the last stage produced —
+      // a second blind write would risk stacking copies on mis-placed ones.
+      if (!verify()) {
+        console.warn("[LLM Content] Framework write chain exhausted, field state left as-is (undo available)");
+      }
+    };
+    stage(attempt === 0 ? 0 : 1);
+  }
+
+  // Dispatch a synthetic paste event carrying `text`. Returns false when the
+  // engine's ClipboardEvent constructor cannot carry clipboard data (the
+  // listener would see an empty DataTransfer and insert nothing).
+  function dispatchPasteCE(el, text) {
+    try {
+      let dt;
+      try { dt = new DataTransfer(); } catch (e) { return false; }
+      dt.setData('text/plain', String(text));
+      const ev = new ClipboardEvent('paste', {
+        clipboardData: dt,
+        bubbles: true,
+        cancelable: true
+      });
+      // Feature-detect: some engines ignore clipboardData in the init dict.
+      let carried = true;
+      try {
+        carried = !!ev.clipboardData &&
+          ev.clipboardData.getData('text/plain') === String(text);
+      } catch (e) { /* ignore */ }
+      if (!carried) return false;
+      el.dispatchEvent(ev);
+      return true;
     } catch (e) {
       return false;
     }
@@ -1339,6 +1501,8 @@
   function startFullTextReplacement(textAction, el, fallbackText) {
     // Clear leftover state from a previous selection run
     cleanedSelection.delete(el);
+    // Invalidate any scheduled paste write from a previous action
+    pasteWriteToken++;
 
     const text = (fallbackText !== undefined && fallbackText !== null && fallbackText !== '')
       ? fallbackText
@@ -1440,6 +1604,8 @@
   function startSelectionReplacement(textAction, el, sel, rawTextFallback) {
     // Clear leftover state so this run starts from the current selection
     cleanedSelection.delete(el);
+    // Invalidate any scheduled paste write from a previous action
+    pasteWriteToken++;
 
     const rawText = sel.text || rawTextFallback || '';
     let streamSourceText = rawText;
@@ -1511,16 +1677,29 @@
     const applyChunk = (newText, isFinal) => {
       if (frameworkCE) {
         // Framework editors revert direct DOM writes, so all writes go through
-        // the editing pipeline. Buffer everything and write once at the end:
+        // model-aware paths. Buffer everything and write once at the end:
         // per-token select-all + insertText snapshots can stack copies when
         // the engine's selection state is stale (see startFullTextReplacement).
         if (!isFinal) return;
-        if (isCE && sel.range && rangeIsWithin(sel.range, el) &&
-            execInsertTextCE(el, sel.range, newText)) {
+        if (isThunderbirdUA()) {
+          // TB compose: the proven sync execCommand pipeline (its Gecko
+          // HTMLEditor owns transactions; no async model to wait for).
+          if (isCE && sel.range && rangeIsWithin(sel.range, el) &&
+              execInsertTextCE(el, sel.range, newText)) {
+            return;
+          }
+          if (execSetCEText(el, newText)) return;
+          finalizeCEFrozen(el, newText);
           return;
         }
-        if (execSetCEText(el, newText)) return;
-        finalizeCEFrozen(el, newText);
+        // Browser framework editor (CKEditor in Teams, Draft.js, Lexical):
+        // execCommand writes never reach the editor's model — the ONLY write
+        // the model natively accepts is a paste. See scheduleFrameworkPasteWrite.
+        if (isCE && sel.range && rangeIsWithin(sel.range, el)) {
+          scheduleFrameworkPasteWrite(el, newText, sel.range, getElementFullText(el), 0);
+        } else {
+          scheduleFrameworkPasteWrite(el, newText, null, getElementFullText(el), 0);
+        }
         return;
       }
       if (isFrozen) {
@@ -2626,6 +2805,20 @@
         return;
       }
 
+      // Framework-managed contenteditable in the BROWSER: the editor's model
+      // never accepts execCommand/DOM writes — the write vanishes on the
+      // next render cycle (Teams/CKEditor: silently reverted; the DOM
+      // readback looks fine until the model re-renders). The only write
+      // such editors take into their model is a PASTE, after their async
+      // selection observer picked up our DOM selection. scheduleFrameworkPasteWrite
+      // handles select → pause → paste → verify → retry → pipeline fallback.
+      // Thunderbird keeps the sync pipeline (isFrameworkManagedCE returns
+      // true there; its Gecko HTMLEditor has no model to miss).
+      if (isFrameworkManagedCE(el) && !isThunderbirdUA()) {
+        scheduleFrameworkPasteWrite(el, newText, null, getElementFullText(el), 0);
+        return;
+      }
+
       // Framework editors (Lexical/ProseMirror/Quill/…) revert direct DOM
       // writes on the next keystroke; route through the editing pipeline.
       if (isFrameworkManagedCE(el)) {
@@ -2779,6 +2972,17 @@
 
       captureUndoState(activeElement, activeElement.innerText || '', null, null, true);
 
+      // Framework-managed contenteditable in the BROWSER: execCommand/DOM
+      // writes never reach the editor's model — paste is the only write it
+      // takes (see scheduleFrameworkPasteWrite). Thunderbird keeps the sync
+      // pipeline.
+      if (isFrameworkManagedCE(activeElement) && !isThunderbirdUA()) {
+        scheduleFrameworkPasteWrite(activeElement, newText, range,
+          getElementFullText(activeElement), 0);
+        showUndoToast();
+        return;
+      }
+
       // Framework editors revert direct DOM writes — route the replacement
       // through the editing pipeline (see isFrameworkManagedCE).
       if (isFrameworkManagedCE(activeElement)) {
@@ -2867,6 +3071,9 @@
     const state = lastUndoState;
     lastUndoState = null;
     hideUndoToast();
+    // Any paste write still scheduled for a previous action must not land
+    // on top of the restored original.
+    pasteWriteToken++;
 
     if (!state || !state.element) return;
 
