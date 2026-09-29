@@ -95,6 +95,8 @@ Open the extension options (puzzle icon in the toolbar → **LLM Text Assistant*
 
 **Multi-line selections** (v1.5.10): the selected text in rich-text fields is read with its line breaks intact — results keep the original line structure instead of coming back as a single line (a regression since v1.5.0 where `Range.toString()` dropped breaks at `<br>`/block boundaries).
 
+**Teams / React editors** (v1.5.14): replacement now works in Microsoft Teams chat compose (and other React/Vue/Angular-rendered editors). The floating icon appeared (v1.5.13 iframes fix) but the text was never replaced: the editor is framework-managed without any recognizable editor-library signals, so the extension took the direct-DOM write path — and React-style frameworks reconcile their DOM from an internal model, silently reverting un-modelled writes. Two-part fix: (1) `isFrameworkManagedCE()` now recognizes framework-rendered contenteditables (framework state markers on the editable or its parent wrapper) and routes all writes through the editing pipeline (`beforeinput`/`input` events the framework accepts); (2) direct writes in `replaceFullTextInElement()` are verified by read-back — if the write is reverted (synchronously or on the framework's async render schedule) and the field still shows exactly the pre-replacement text, the replacement is retried once through the editing pipeline.
+
 ## 🔒 Privacy & Security Notes
 
 - **No data collection**: The extension collects nothing. API calls go directly from your browser to the endpoint you configured, there is no intermediate server

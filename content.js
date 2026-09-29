@@ -1019,6 +1019,28 @@
       }
     } catch (e) { /* ignore */ }
 
+    // 6th signal: React/Vue/Angular-rendered contenteditable (Teams, and
+    // most enterprise apps). These frameworks reconcile the DOM from an
+    // internal model and revert direct DOM writes exactly like the editor
+    // libraries above — React attaches __reactFiber$/__reactProps$ (or
+    // __reactInternalInstance$ in legacy builds) to every node it renders,
+    // Vue attaches __vue__, Angular sets __ngContext__. The contenteditable
+    // itself is framework-rendered when it or its parent carries one.
+    try {
+      const fwKeys = ['__reactFiber$', '__reactInternalInstance$', '__vue__',
+        '__vueParentComponent', '__ngContext__'];
+      for (const key of Object.keys(el)) {
+        if (fwKeys.some((p) => key.startsWith(p))) return true;
+      }
+      // Some apps render the editable itself but mount the framework state
+      // one level up (a wrapper div).
+      if (el.parentElement) {
+        for (const key of Object.keys(el.parentElement)) {
+          if (fwKeys.some((p) => key.startsWith(p))) return true;
+        }
+      }
+    } catch (e) { /* ignore */ }
+
     return false;
   }
 
@@ -2614,13 +2636,66 @@
         console.warn("[LLM Content] Framework editor rejected pipeline write, falling back");
       }
 
+      // Snapshot BEFORE writing: the delayed revert check compares against
+      // the pre-replacement text (see below).
+      const beforeText = getElementFullText(el);
+
       el.innerText = newText;
+
+      // Verify the write stuck: React/Vue editors reconcile the DOM from
+      // their model and revert un-modelled mutations asynchronously (at the
+      // next microtask/render) — for contenteditable, innerText writes are
+      // un-modelled. Two checks: synchronous read-back (MutationObserver-
+      // based guards revert immediately) and a delayed re-check (React
+      // reconciles on its own schedule). The delayed retry only fires when
+      // the field still shows EXACTLY the pre-replacement text — the write
+      // was reverted and the user has not typed anything since.
+      if (!readBackMatches(el, newText)) {
+        console.warn("[LLM Content] Direct write was reverted, retrying via editing pipeline");
+        if (execSetCEText(el, newText)) {
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          return;
+        }
+      }
 
       // Re-anchor the live selection: innerText replaced every child node, so
       // the previous selection points at detached nodes (see anchorCaretAtEnd).
       anchorCaretAtEnd(el);
 
       el.dispatchEvent(new Event('input', { bubbles: true }));
+
+      // Delayed verification: React-style reverts happen on the framework's
+      // render schedule, after this function returned. If the field then
+      // still shows the exact old text (reverted, no user input since),
+      // retry once through the editing pipeline.
+      try {
+        setTimeout(() => {
+          try {
+            const nowText = getElementFullText(el);
+            if (!readBackMatches(el, newText) &&
+                readBackMatches(el, beforeText) &&
+                isNodeInDocument(el)) {
+              console.warn("[LLM Content] Write reverted asynchronously, retrying via editing pipeline");
+              if (execSetCEText(el, newText)) {
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                anchorCaretAtEnd(el);
+              }
+            }
+          } catch (e) { /* ignore */ }
+        }, 350);
+      } catch (e) { /* ignore */ }
+    }
+  }
+
+  // Compare the element's visible text against the expected replacement,
+  // ignoring whitespace differences (innerText adds trailing newlines in
+  // block elements).
+  function readBackMatches(el, expected) {
+    try {
+      const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+      return norm(getElementFullText(el)) === norm(expected);
+    } catch (e) {
+      return true; // cannot read -> assume the write stuck (no retry)
     }
   }
 

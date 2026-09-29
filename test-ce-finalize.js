@@ -128,6 +128,24 @@ check('Firefox plain CE -> direct DOM path',
 check('Chrome plain CE -> direct DOM path',
   makeIsFw('Mozilla/5.0 Chrome/126.0')(bareEditable) === false);
 
+// v1.5.14: framework-rendered editables (Teams: React) must take the
+// pipeline path — direct DOM writes get reconciled away.
+const chromeUA = 'Mozilla/5.0 Chrome/126.0';
+check('React fiber on the editable -> pipeline (Teams)',
+  makeIsFw(chromeUA)({ isContentEditable: true, '__reactFiber$abc': {} }) === true);
+check('legacy React internal instance -> pipeline',
+  makeIsFw(chromeUA)({ isContentEditable: true, '__reactInternalInstance$abc': {} }) === true);
+check('Vue marker on the editable -> pipeline',
+  makeIsFw(chromeUA)({ isContentEditable: true, __vue__: {} }) === true);
+check('Angular ngContext on the editable -> pipeline',
+  makeIsFw(chromeUA)({ isContentEditable: true, __ngContext__: {} }) === true);
+check('framework state on parent wrapper -> pipeline',
+  makeIsFw(chromeUA)({ isContentEditable: true, parentElement: { '__reactFiber$abc': {} } }) === true);
+check('plain CE with unrelated props stays on direct path',
+  makeIsFw(chromeUA)({ isContentEditable: true, __data: 1, someProp: 2 }) === false);
+check('parent without framework state stays on direct path',
+  makeIsFw(chromeUA)({ isContentEditable: true, parentElement: { other: 1 } }) === false);
+
 // --- 3) finalizeCEState ----------------------------------------------------
 // A: marker mode with content — markers removed, caret after last content node
 {
