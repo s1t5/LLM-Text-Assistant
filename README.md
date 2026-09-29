@@ -112,6 +112,25 @@ You can also:
 - Submit a Pull Request for improvements
 - Help improve documentation
 
+### Repository structure (trunk + platform overlays)
+
+The `main` branch holds **all shared sources** (content.js, background.js, options, locales, icons) plus the canonical `manifest.json` — the only place the version number lives. Platform-specific files live as overlays:
+
+```
+manifest.json                    ← Chrome manifest (canonical version)
+platform/firefox/manifest.json   ← Gecko settings (gecko id, min version)
+platform/thunderbird/…           ← manifest, background.js (compose
+                                   injection), popup.html/js (toolbar)
+```
+
+`tools/build.mjs` assembles the three store trees into `build/`, injects the version into the Firefox/Thunderbird manifests, validates everything and packages the store zips/xpi into `dist/`:
+
+```bash
+node tools/build.mjs          # build + package all three targets
+node tools/build.mjs --no-zip # verification build only
+node tools/build.mjs firefox  # a single target
+```
+
 ## 💖 Support the Project
 
 If you find this project useful and would like to support its continued development, you can buy me a coffee! Your support helps me dedicate more time and resources to improving the application and adding new features. While financial support is not required, it is greatly appreciated and helps ensure the project's ongoing maintenance and enhancement.

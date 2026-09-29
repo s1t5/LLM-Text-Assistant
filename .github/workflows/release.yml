@@ -1,24 +1,34 @@
 # Release browser extension
 #
-# Automatically creates a GitHub release with the three store packages
-# (Chrome zip, Firefox zip, Thunderbird xpi) whenever a push to main
-# carries a manifest.json version that has no matching tag yet.
+# Two jobs:
+#   test    — runs on every push: node syntax checks (via tools/build.mjs
+#             validation) and the unit test suites (test-*.js).
+#   release — runs only when a push to main carries a manifest.json version
+#             that has no matching release yet: builds the three store
+#             packages and publishes the GitHub release.
 #
-# - Tag and release name equal the manifest version exactly (x.y.z, no
+# Release details:
+# - Release (and tag) name equal the manifest version exactly (x.y.z, no
 #   "v" prefix), matching the artifact scheme <version>-<target>.<ext>.
-# - Packages are built FRESH from the source trees in the repo:
-#     Chrome:      repo root
-#     Firefox:    Pub/firefox-build/
-#     Thunderbird: Pub/thunderbird-build/
-#   The versioned copies under Pub/*.zip are manual staging for store
-#   uploads and are deliberately NOT used here.
-# - Build dirs are verified to be in sync with the root sources before
-#   packaging (a stale build dir would silently release old code).
-# - If the tag already exists (fixes pushed without a version bump),
-#   the job exits successfully without creating a duplicate release.
+# - Packages are built FRESH from the trunk + platform overlays by
+#   tools/build.mjs, which also validates everything (JS syntax, locale
+#   key parity, version format, overlay completeness) and injects the
+#   root manifest version into the Firefox and Thunderbird manifests —
+#   the version lives in ONE place: manifest.json in the repo root.
+# - The version-bump commit is tagged IN GITEA, in the same push as the
+#   commit. Reason: this repo is the Gitea push-mirror source, and the
+#   mirror PRUNES refs that only exist on the GitHub side — a tag created
+#   only on GitHub (as `gh release create` does when no tag exists) is
+#   deleted again on the next mirror sync, turning the release into a
+#   hidden draft. A tag that arrives mirrored cannot be pruned. The
+#   release therefore attaches to the existing mirrored tag; if the tag
+#   has not arrived yet, --target creates it at the same commit (same SHA
+#   → the later mirror sync is a no-op, nothing is pruned).
+# - If the release already exists (re-pushed fix commits without a version
+#   bump, or a partially completed earlier run), the job exits
+#   successfully without creating a duplicate.
 #
-# Note: this repository is the Gitea push-mirror source; the workflow
-# runs on the GitHub mirror (github.com/s1t5/LLM-Text-Assistant), which
+# Runs on the GitHub mirror (github.com/s1t5/LLM-Text-Assistant), which
 # Gitea syncs on every commit.
 
 name: Release browser extension
@@ -37,7 +47,32 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Unit tests (test-*.js)
+        run: |
+          fails=0
+          for t in test-*.js; do
+            echo "::group::$t"
+            node "$t" || fails=1
+            echo "::endgroup::"
+          done
+          if [ "$fails" != "0" ]; then
+            echo "::error::unit tests failed"
+            exit 1
+          fi
+          echo "All test suites passed."
+
+      - name: Build validation (all targets, no packaging)
+        run: |
+          node tools/build.mjs --no-zip
+
   release:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository (full history + tags)
@@ -47,8 +82,9 @@ jobs:
 
       - name: Detect unreleased version
         id: version
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git fetch --tags --force
           VERSION=$(jq -r '.version' manifest.json)
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Manifest version: $VERSION"
@@ -58,77 +94,21 @@ jobs:
             exit 1
           fi
 
-          if git rev-parse -q --verify "refs/tags/$VERSION" >/dev/null 2>&1; then
+          # Skip when a release for this version already exists (published
+          # or draft) — re-pushed fix commits without a version bump, or a
+          # partially completed earlier run.
+          if gh release view "$VERSION" >/dev/null 2>&1; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "Tag $VERSION already exists — nothing to release."
+            echo "Release $VERSION already exists — nothing to do."
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "New version $VERSION detected — building release."
           fi
 
-      - name: Verify sources
+      - name: Build packages (trunk + platform overlays)
         if: steps.version.outputs.changed == 'true'
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
-
-          # JS syntax
-          for f in background.js content.js options.js \
-                   Pub/firefox-build/background.js Pub/firefox-build/content.js Pub/firefox-build/options.js \
-                   Pub/thunderbird-build/background.js Pub/thunderbird-build/content.js \
-                   Pub/thunderbird-build/options.js Pub/thunderbird-build/popup.js; do
-            node --check "$f" || { echo "::error::node --check failed for $f"; exit 1; }
-          done
-
-          # Manifests: valid JSON, all three at the same version
-          for m in manifest.json Pub/firefox-build/manifest.json Pub/thunderbird-build/manifest.json; do
-            jq -e . "$m" > /dev/null || { echo "::error::$m is not valid JSON"; exit 1; }
-            V=$(jq -r '.version' "$m")
-            if [ "$V" != "$VERSION" ]; then
-              echo "::error::$m has version $V, expected $VERSION — keep all three manifests in sync"
-              exit 1
-            fi
-          done
-
-          # Locale keys must match between de and en
-          diff <(jq -S 'keys' _locales/de/messages.json) <(jq -S 'keys' _locales/en/messages.json) \
-            || { echo "::error::_locales de/en key sets differ"; exit 1; }
-
-          # Build dirs must be in sync with the root sources.
-          # (thunderbird-build/background.js intentionally differs: no-op injectReplacement)
-          for f in background.js content.js options.js options.html; do
-            cmp -s "$f" "Pub/firefox-build/$f" \
-              || { echo "::error::Pub/firefox-build/$f is out of sync with the repo root — copy changed files into the build dir"; exit 1; }
-          done
-          for f in content.js options.js options.html; do
-            cmp -s "$f" "Pub/thunderbird-build/$f" \
-              || { echo "::error::Pub/thunderbird-build/$f is out of sync with the repo root — copy changed files into the build dir"; exit 1; }
-          done
-          diff -rq icons Pub/firefox-build/icons > /dev/null \
-            || { echo "::error::Pub/firefox-build/icons differs from the repo root"; exit 1; }
-          diff -rq _locales Pub/firefox-build/_locales > /dev/null \
-            || { echo "::error::Pub/firefox-build/_locales differs from the repo root"; exit 1; }
-          diff -rq icons Pub/thunderbird-build/icons > /dev/null \
-            || { echo "::error::Pub/thunderbird-build/icons differs from the repo root"; exit 1; }
-          diff -rq _locales Pub/thunderbird-build/_locales > /dev/null \
-            || { echo "::error::Pub/thunderbird-build/_locales differs from the repo root"; exit 1; }
-
-      - name: Package extension (Chrome / Firefox / Thunderbird)
-        if: steps.version.outputs.changed == 'true'
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          mkdir -p dist
-
-          # Chrome — packed from the repo root
-          zip -qr "dist/${VERSION}-chrome.zip" \
-            manifest.json background.js content.js options.html options.js icons _locales
-
-          # Firefox — packed from Pub/firefox-build (own manifest with gecko settings)
-          ( cd Pub/firefox-build && zip -qr "../../dist/${VERSION}-firefox.zip" \
-              manifest.json background.js content.js options.html options.js icons _locales )
-
-          # Thunderbird — packed from Pub/thunderbird-build (compose scripts + popup)
-          ( cd Pub/thunderbird-build && zip -qr "../../dist/${VERSION}-thunderbird.xpi" \
-              manifest.json background.js content.js popup.html popup.js options.html options.js icons _locales )
+          node tools/build.mjs
 
       - name: Verify packages
         if: steps.version.outputs.changed == 'true'
@@ -157,8 +137,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          # --target creates the tag (named exactly like the version) on the
-          # pushed commit; the release is published with generated notes.
+          # The version-bump commit carries a Gitea-side tag of the same
+          # name, which the push mirror replicates. When it has arrived,
+          # the release attaches to it; --target only matters when the
+          # mirror sync is still in flight (same SHA either way).
           gh release create "$VERSION" \
             --title="$VERSION" \
             --target="$GITHUB_SHA" \

@@ -227,8 +227,8 @@
   }
 
   function handleShortcutKeydown(e) {
-    const el = document.activeElement;
-    if (!isTextInput(el)) return;
+    const el = resolveEditingTarget();
+    if (!el) return;
 
     const shortcutStr = serializeKeyboardEvent(e);
     if (!shortcutStr) return;
@@ -306,7 +306,7 @@
       if (request.textAction === "freePrompt") {
         uiSuspended = false;
         const target = resolveFreePromptTarget(
-          document.activeElement, activeInputElement);
+          resolveEditingTarget(), activeInputElement);
         if (target) activeInputElement = target;
         openFreePromptChat();
         sendResponse({ success: true });
@@ -324,20 +324,25 @@
   // Initialize: attach focus listeners to all existing editable elements
   function init() {
     loadActions();
-    attachListeners(document.body);
 
-    // Watch for dynamically added elements
-    const observer = new MutationObserver((mutations) => {
-      for (const mutation of mutations) {
-        for (const node of mutation.addedNodes) {
-          if (node.nodeType === Node.ELEMENT_NODE) {
-            attachListeners(node);
-          }
-        }
-      }
-    });
+    // Focus tracking: one delegated focusin listener on the document catches
+    // every text field gaining focus, including editors inside (open or
+    // closed) shadow trees — focusin is a composed event and composedPath()
+    // exposes the real inner element. This replaces the old MutationObserver
+    // + querySelectorAll scan, which never saw editors inside shadow roots
+    // (e.g. Reddit's Lit-based comment composer) and re-scanned the DOM on
+    // every mutation (expensive on SPA sites).
+    document.addEventListener('focusin', handleFocusIn, true);
 
-    observer.observe(document.body, { childList: true, subtree: true });
+    // A field may already hold focus when the script runs (e.g. Thunderbird
+    // compose windows inject after load). Track it so shortcuts and the
+    // toolbar popup work — but do not force the floating icon, matching the
+    // previous behaviour where a focus before injection never showed it.
+    const alreadyFocused = resolveEditingTarget();
+    if (alreadyFocused) {
+      uiSuspended = false;
+      activeInputElement = alreadyFocused;
+    }
 
     // Listen for storage changes to reload actions
     chrome.storage.onChanged.addListener((changes, namespace) => {
@@ -350,28 +355,6 @@
     document.addEventListener('keydown', handleShortcutKeydown, true);
   }
 
-  // Track which elements already have a focus listener. A WeakSet instead of
-  // a data attribute: in Thunderbird the editable element IS the mail body,
-  // and any attribute we set on it would be serialized into the message.
-  const listenerAttachedElements = new WeakSet();
-
-  function attachListeners(root) {
-    const elements = root.querySelectorAll('input, textarea, [contenteditable="true"]');
-    for (const el of elements) {
-      if (isTextInput(el) && !listenerAttachedElements.has(el)) {
-        listenerAttachedElements.add(el);
-        el.addEventListener('focus', onElementFocus);
-      }
-    }
-    // Also check if root itself is editable
-    if (root.matches && root.matches('input, textarea, [contenteditable="true"]')) {
-      if (isTextInput(root) && !listenerAttachedElements.has(root)) {
-        listenerAttachedElements.add(root);
-        root.addEventListener('focus', onElementFocus);
-      }
-    }
-  }
-
   function isTextInput(el) {
     if (el.tagName === 'TEXTAREA') return true;
     if (el.isContentEditable) return true;
@@ -381,6 +364,54 @@
       return textTypes.includes((el.type || 'text').toLowerCase());
     }
     return false;
+  }
+
+  // Walk a composedPath()-like chain from host to inner node and return the
+  // first (outermost) text input found. When a field inside a shadow root has
+  // focus, document.activeElement retargets to the shadow HOST — the inner
+  // editor is only reachable through the event's composedPath() or by walking
+  // the host's open shadow root.
+  function findTextInputOnPath(path) {
+    for (const node of path) {
+      if (node && isTextInput(node)) return node;
+    }
+    return null;
+  }
+
+  // Resolve which editing field currently has focus. Shadow-DOM aware:
+  // starts at document.activeElement; when that is a shadow host whose
+  // inner active element is a text field, descends into the shadow root
+  // (open roots only — closed ones hide activeElement, but focusin's
+  // composedPath covers them at event time).
+  function resolveEditingTarget() {
+    let el = document.activeElement;
+    let guard = 0;
+    while (el && guard++ < 32) {
+      if (isTextInput(el)) return el;
+      // No text field here — maybe focus sits in a nested shadow root of
+      // this host. activeElement inside a shadow root points deeper; it is
+      // null when focus sits on the root itself.
+      const sr = el.shadowRoot;
+      if (sr && sr.activeElement) {
+        el = sr.activeElement;
+        continue;
+      }
+      return null;
+    }
+    return null;
+  }
+
+  // focusin handler: focusin bubbles (composed) across shadow boundaries, so
+  // one delegated listener sees every text field gaining focus — including
+  // editors inside web components (Reddit, framework editors, …).
+  function handleFocusIn(e) {
+    const el = findTextInputOnPath(e.composedPath ? e.composedPath() : [e.target]);
+    if (!el) return;
+    // Re-enable UI after a suspend (e.g. a Thunderbird draft was saved or a
+    // send was cancelled after the suspend message arrived).
+    uiSuspended = false;
+    activeInputElement = el;
+    showFloatingIcon();
   }
 
   // Pick the field a free-prompt chat should be attached to. Called from the
@@ -396,15 +427,6 @@
     if (usable(liveActiveElement)) return liveActiveElement;
     if (usable(rememberedElement)) return rememberedElement;
     return null;
-  }
-
-  function onElementFocus(e) {
-    if (!isTextInput(e.target)) return;
-    // Re-enable UI after a suspend (e.g. a Thunderbird draft was saved or a
-    // send was cancelled after the suspend message arrived).
-    uiSuspended = false;
-    activeInputElement = e.target;
-    showFloatingIcon();
   }
 
   // Global click handler to detect clicks outside our UI
@@ -1234,8 +1256,8 @@
   // =====================================================================
 
   // Returns the non-collapsed selection inside el, or null when nothing
-  // is selected. Shape: {mode:'range',start,end,text,posBefore}
-  //                  or  {mode:'ce',range,text,posBefore}
+  // is selected. Shape: {mode:'range',start,end,text}
+  //                  or  {mode:'ce',range,text}
   function getElementSelection(el) {
     if (!el) return null;
 
@@ -1250,7 +1272,6 @@
         start,
         end,
         text: el.value.substring(start, end),
-        posBefore: document.activeElement === el
       };
     }
 
@@ -1268,7 +1289,6 @@
         // the LLM then returned single-line results that were inserted
         // without breaks (regression since 8cb1132, fixed in v1.5.10).
         text: selection.toString(),
-        posBefore: document.activeElement === el
       };
     }
 
@@ -1600,7 +1620,7 @@
       // User explicitly triggered an action (toolbar popup in Thunderbird or
       // context menu in the browser) — resume UI suspended by a cancelled send.
       uiSuspended = false;
-      let el = document.activeElement;
+      let el = resolveEditingTarget();
       const isUsable = (node) => node && isTextInput(node);
       if (!isUsable(el)) {
         el = activeInputElement;
@@ -1630,7 +1650,6 @@
           start: selectionInfo.selStart,
           end: selectionInfo.selEnd,
           text: selectionInfo.selectionText || "",
-          posBefore: true
         };
         startSelectionReplacement(textAction, el, sel, contextText);
         resolve();
@@ -1662,7 +1681,6 @@
             mode: 'ce',
             range,
             text: selectionInfo.selectionText,
-            posBefore: true
           };
           startSelectionReplacement(textAction, el, sel, contextText);
         } else {
@@ -1675,7 +1693,6 @@
             mode: 'ce-frozen',
             range: null,
             text: selectionInfo.selectionText,
-            posBefore: true
           };
           startSelectionReplacement(textAction, el, sel, contextText);
         }
@@ -2542,11 +2559,19 @@
     } catch (e) { /* ignore */ }
   }
 
+  // Whether the node is still connected to the document. document.contains()
+  // does not cross shadow boundaries — a field inside a (open or closed)
+  // shadow root would look detached. getRootNode() reaches the true root
+  // even across shadow trees.
+  function isNodeInDocument(node) {
+    return !!(node && node.isConnected);
+  }
+
   function replaceFullTextInElement(el, newText) {
     if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
       // Check if element is still in DOM
-      if (!document.contains(el)) {
-        const activeEl = document.activeElement;
+      if (!isNodeInDocument(el)) {
+        const activeEl = resolveEditingTarget();
         if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA')) {
           el = activeEl;
         } else {
@@ -2567,7 +2592,7 @@
       el.dispatchEvent(new Event('change', { bubbles: true }));
 
     } else if (el.isContentEditable) {
-      if (!document.contains(el)) {
+      if (!isNodeInDocument(el)) {
         console.warn("[LLM Content] ContentEditable element no longer in DOM");
         return;
       }
@@ -2617,7 +2642,7 @@
   }
 
   function replaceSelectedText(newText) {
-    const activeElement = document.activeElement;
+    const activeElement = resolveEditingTarget();
 
     if (!activeElement) {
       console.warn("No active element found");
@@ -2763,7 +2788,7 @@
 
     if (!state || !state.element) return;
 
-    const el = document.contains(state.element) ? state.element : document.activeElement;
+    const el = isNodeInDocument(state.element) ? state.element : resolveEditingTarget();
     if (!el) return;
 
     if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {

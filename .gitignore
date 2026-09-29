@@ -25,3 +25,6 @@ npm-debug.log*
 # Temp
 *.tmp
 *.bak
+# Generated build trees and packages (tools/build.mjs)
+/build/
+/dist/
