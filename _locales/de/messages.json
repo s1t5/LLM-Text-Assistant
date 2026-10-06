@@ -376,7 +376,10 @@
     "message": "Modelle werden geladen…"
   },
   "optionsModelsLoaded": {
-    "message": "$COUNT$ Modelle gefunden"
+    "message": "$COUNT$ Modelle gefunden",
+    "placeholders": {
+      "count": { "content": "$1", "example": "12" }
+    }
   },
   "optionsModelsError": {
     "message": "Modelle konnten nicht geladen werden: "

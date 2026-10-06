@@ -113,6 +113,10 @@ Open the extension options (puzzle icon in the toolbar → **LLM Text Assistant*
 
 **Model list from the endpoint**: The options page has a **Load models** button next to the model field. It derives `GET <base>/models` from the configured chat-completions URL (`…/v1/chat/completions` → `…/v1/models`) and fills the model input's autocomplete. Works with OpenAI, Ollama, LM Studio and llama.cpp. The request runs in the background (not subject to a page's CSP), but the endpoint still needs to allow the extension origin — a `CORS/DNS` error in the status line almost always means the local server needs `--allow-origins`/`OLLAMA_ORIGINS`.
 
+## 🆕 v1.6.2 — fix: extension failed to load in Chrome
+
+A locale placeholder was declared in the message text but not in the `placeholders` block (`optionsModelsLoaded`). Chrome aborts the **entire extension load** when it finds an undeclared `$TOKEN$`, so the extension did not appear at all in Chrome after installing from the store — the reason the Chrome Web Store rejected v1.6.0 and v1.6.1 as "does not work as described". Fixed by declaring the placeholder in both locales. The build now rejects undeclared placeholders, `test-locale-placeholders.js` covers it in CI, and `tools/chrome-load-check.py` loads the built package into a real Chrome to catch this class of error before submitting.
+
 ## 🔒 Privacy & Security Notes
 
 - **No data collection**: The extension collects nothing. API calls go directly from your browser to the endpoint you configured, there is no intermediate server

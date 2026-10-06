@@ -72,6 +72,21 @@ jobs:
           node tools/build.mjs --no-zip
           node tools/store-boot-check.js
 
+      - name: Chrome load check (the extension must actually load)
+        run: |
+          node tools/build.mjs --no-zip
+          if python3 tools/chrome-load-check.py build/chrome; then
+            echo "Extension loads in Chrome."
+          else
+            rc=$?
+            if [ "$rc" = "2" ]; then
+              echo "::warning::No usable Chrome on this runner — load check skipped."
+            else
+              echo "::error::Chrome refused to load the built extension (see log above)."
+              exit 1
+            fi
+          fi
+
       - name: Build validation (all targets, no packaging)
         run: |
           node tools/build.mjs --no-zip

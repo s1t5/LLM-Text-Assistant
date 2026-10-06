@@ -165,6 +165,29 @@ function validate() {
     problems.push('_locales de/en key sets differ');
   }
 
+  // Message placeholders must be defined. Chrome refuses to load the WHOLE
+  // extension when a message uses $TOKEN$ without a matching `placeholders`
+  // entry ("Variable $COUNT$ used but not defined" — found at v1.6.2 after
+  // v1.6.0/v1.6.1 were rejected by the Web Store for broken functionality).
+  // `$$` is an escaped literal dollar sign and must not be flagged.
+  for (const [lang, dict] of [['de', de], ['en', en]]) {
+    for (const [key, entry] of Object.entries(dict)) {
+      const msg = typeof entry === 'object' && entry !== null ? entry.message : entry;
+      if (typeof msg !== 'string') continue;
+      const declared = new Set(
+        Object.keys((entry && entry.placeholders) || {}).map((p) => p.toLowerCase())
+      );
+      const stripped = msg.replace(/\$\$/g, '\u0000');
+      for (const m of stripped.matchAll(/\$([A-Za-z0-9_]+)\$/g)) {
+        if (!declared.has(m[1].toLowerCase())) {
+          problems.push(
+            `_locales/${lang}/messages.json: '${key}' uses $${m[1]}$ but defines no such placeholder`
+          );
+        }
+      }
+    }
+  }
+
   // Overlay files must exist.
   for (const name of Object.keys(targets)) {
     const t = targets[name];

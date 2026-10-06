@@ -376,7 +376,10 @@
     "message": "Loading models…"
   },
   "optionsModelsLoaded": {
-    "message": "$COUNT$ models found"
+    "message": "$COUNT$ models found",
+    "placeholders": {
+      "count": { "content": "$1", "example": "12" }
+    }
   },
   "optionsModelsError": {
     "message": "Could not load models: "
