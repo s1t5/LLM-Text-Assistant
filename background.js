@@ -19,7 +19,15 @@ function buildDefaultConfig() {
     customActions: [],
     freePromptEnabled: true,
     builtinShortcuts: {},
-    freePromptShortcut: ""
+    freePromptShortcut: "",
+    // v1.6.0 — must stay in sync with DEFAULT_KEYS below: onInstalled seeds
+    // every DEFAULT_KEYS entry whose stored value is undefined from this
+    // object. A key listed in DEFAULT_KEYS but missing here writes `undefined`
+    // into storage on a fresh install, so the options page renders empty
+    // fields instead of the documented defaults.
+    contextEnabled: false,
+    pageContextChars: "600",
+    confirmBeforeReplace: false
   };
 }
 
