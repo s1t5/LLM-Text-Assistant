@@ -1,33 +1,85 @@
 # AGENTS.md
 
 Dieser Ordner enthält die **LLM Text Assistent** Browser-Erweiterung (Manifest V3).
+Repo: `git.schrrs.de/s1t5/LLM-Text-Assistant` (Push-Mirror auf `github.com/s1t5/LLM-Text-Assistant`).
 
-## Projektstruktur
+## Projektstruktur (Trunk + Plattform-Overlays, seit v1.5.12)
 
 | Datei/Ordner | Zweck |
 |---|---|
-| `manifest.json` | Chrome-Manifest (MV3). Firefox hat ein eigenes Manifest in `Pub/firefox-build/`. |
-| `background.js` | Service Worker: Kontextmenü, API-Calls, Streaming, Retry/Abort |
-| `content.js` | Text-Ersetzung, schwebendes Icon, Chat-Fenster, Undo-Toast |
+| `manifest.json` | Chrome-Manifest (MV3) **und einzige Quelle der Versionsnummer** |
+| `background.js` | Service Worker: Kontextmenü, API-Calls, Streaming, Retry/Abort, Model-Liste |
+| `content.js` | Text-Ersetzung, schwebendes Icon, Chat-Fenster, Diff-Vorschau, Undo-Toast |
 | `options.html` / `options.js` | Einstellungsseite |
 | `_locales/` | i18n-Dateien (siehe unten) |
-| `Pub/` | Quellbäume `firefox-build/`/`thunderbird-build/` mit den plattformspezifischen Manifesten — Packquellen für den Release-Workflow. Versionierte ZIPs/XPI werden **nicht mehr gebaut** (übernimmt die GitHub Action; die bis v1.5.7 vorhandenen sind historisch). |
+| `platform/firefox/manifest.json` | Gecko-Overlay (Gecko-ID, `strict_min_version`) — **ohne** `version` |
+| `platform/thunderbird/` | TB-Overlay: `manifest.json`, `background.js` (Compose-Injection), `popup.html`/`popup.js` |
+| `tools/build.mjs` | Baut `build/{chrome,firefox,thunderbird}` aus Root-Quellen + Overlays, injiziert die Version, validiert und packt `dist/<version>-<target>.{zip,xpi}` |
+| `build/`, `dist/` | generiert, gitignored — **niemals** direkt editieren oder committen |
+| `test-*.js` | Node-Tests, string-slicen Funktionen aus den ausgelieferten Quellen |
+
+> **Historie:** Bis v1.5.11 lagen die Plattform-Quellbäume in `Pub/{firefox,thunderbird}-build/`.
+> Diese Struktur ist mit v1.5.12 entfallen (Trunk + Overlays). Versionierte ZIPs/XPI in `Pub/`
+> gibt es nur noch bis v1.5.7 als historische Artefakte. `Pub/` nicht mehr verwenden.
+
+### Build
+
+```bash
+node tools/build.mjs            # alle drei Targets bauen + packen
+node tools/build.mjs --no-zip   # Verifikations-Build (schnell, ohne Pakete)
+node tools/build.mjs firefox    # einzelnes Target
+```
+
+Der Build prüft: JS-Syntax (`node --check`), Versionsformat `x.y.z`, Locale-Key-Parität
+`de`/`en`, Vollständigkeit der Overlays — und bricht bei Fehlern mit Exit-Code ≠ 0 ab.
+Die Version wird **nur** im Root-`manifest.json` gepflegt und zur Build-Zeit in die
+Firefox-/Thunderbird-Manifeste injiziert.
+
+### Tests
+
+```bash
+node test-insert-ce.js         # mehrzeilige execInsertTextCE-Kommando-Sequenzen
+node test-ce-finalize.js       # Marker-/Fragment-Cleanup, Caret, TB-Pipeline-Routing
+node test-exec-set-ce.js       # Ganzfeld-Write-Verifikation (Replace/Stack/Broken-Engine)
+node test-free-prompt-route.js # contextMenuProcess-Routing + Focus-Erkennung
+node test-frame-routing.js     # all_frames + frame-sensitiver Message-Routing
+node test-v16-features.js      # diffWords, modelsUrlFromApiUrl, collectPageContext
+```
+
+Die Tests slicen die Funktionen per String-Slicing aus den ausgelieferten Quellen und
+werten sie aus — sie testen also echten Code, keine Kopie.
 
 ## Thunderbird-Variante
 
-Zusätzlich zur Chrome-/Firefox-Version gibt es eine **Thunderbird-Erweiterung** in `Pub/thunderbird-build/`, die im Mail-Verfassen-Fenster (Compose) läuft.
+Zusätzlich zur Chrome-/Firefox-Version gibt es eine **Thunderbird-Erweiterung** (`platform/thunderbird/`),
+die im Mail-Verfassen-Fenster (Compose) läuft.
 
 ### Unterschiede zur Browser-Version
 
 | Bereich | Browser | Thunderbird |
 |---|---|---|
-| **Injection** | `content_scripts` mit `matches: ["<all_urls>"]` | `browser.scripting.compose.registerScripts()` in `background.js` (MV3 ab TB 128). Alte `browser.composeScripts.register()` ist entfernt — nur für MV2. Beim Start werden auch **bereits geöffnete** Compose-Tabs via `browser.scripting.executeScript` injiziert. |
-| **Einstiegspunkt** | Kontextmenü + Floating-Icon + Shortcuts | Compose-Toolbar-Button (`compose_action` mit `default_popup: popup.html`) + Floating-Icon + Shortcuts. **Kontextmenüs werden nicht unterstützt** (keine `editable`/`selection`-Kontexte in Thunderbird) — Handler in `background.js` ist ein No-Op |
-| **Permissions** | `contextMenus`, `scripting`, `activeTab` | `compose`, `scripting` (+ `storage`) |
+| **Injection** | `content_scripts` mit `matches: ["<all_urls>"]`, `all_frames`, `match_about_blank` | `browser.scripting.compose.registerScripts()` in `background.js` (MV3 ab TB 128). Beim Start werden auch **bereits geöffnete** Compose-Tabs via `browser.scripting.executeScript` injiziert. |
+| **Einstiegspunkt** | Kontextmenü + Floating-Icon + Shortcuts | Compose-Toolbar-Button (`compose_action` mit `default_popup: popup.html`) + Floating-Icon + Shortcuts. **Kontextmenüs werden nicht unterstützt** — der Handler in `background.js` ist ein No-Op |
+| **Permissions** | `contextMenus`, `scripting`, `activeTab`, `storage` | `compose`, `scripting`, `storage` |
 | **Gecko-ID** | `llm-text-assistent@s1t5.dev` (AMO, seit v1.5.0) | `llm-text-assistent-thunderbird@s1t5.dev` (eigene ID, da „Doppelte Add-on-ID" bei gleicher ID wie Firefox-Version) |
 | **Min-Version** | FF 109 | TB 128 (MV3-only, `scripting.compose` erfordert min. 128) |
+| **`background.js`** | Root-Version (mit Kontextmenü-Verwaltung) | Overlay-Version (**divergiert**: Kontextmenü raus, Compose-Script-Injection rein) |
 
-`content.js`, `options.*` und `_locales/` sind **ungeändert** aus der Firefox-Version übernommen — die Text-Ersetzung im Compose-Fenster (HTML-Body = `contenteditable`, Plaintext-Body = `textarea`, Betreff = `input`) nutzt die gleichen Pfade.
+`content.js`, `options.*` und `_locales/` sind zwischen den Targets identisch — die
+Text-Ersetzung im Compose-Fenster (HTML-Body = `contenteditable`, Plaintext-Body =
+`textarea`, Betreff = `input`) nutzt die gleichen Pfade.
+
+> **Achtung:** `platform/thunderbird/background.js` ist eine eigene Kopie der Root-Datei.
+> Änderungen an geteilten Funktionen (Prompt-Aufbau, HTTP-Layer, Streaming, Model-Liste)
+> müssen in **beiden** Dateien erfolgen. `DEFAULT_KEYS` und `buildDefaultConfig()` müssen
+> synchron bleiben, sonst divergiert das `onInstalled`-Seeding.
+
+## Text-Ersetzungs-Architektur
+
+Jede Regel darüber, **wie** LLM-Ergebnisse in Felder geschrieben werden, muss **jede**
+Schicht treffen, sonst divergieren Streaming-, Legacy-Message- und Background-Fallback-Pfade
+still. Die Schichten: `applyChunk` (Streaming), `replaceSelectedText`/`replaceFullText`
+(Legacy-Message), `injectReplacement` in `background.js` (Root; TB-Overlay ist ein No-Op).
 
 ### Zeilenumbruch-Verhalten (seit v1.5.7)
 
@@ -35,7 +87,7 @@ Zeilenumbrüche im LLM-Ergebnis werden **immer erhalten** — bei Selektion und 
 
 - **Regression in v1.5.5** (Framework-Editor-Support): Mehrzeilige Ergebnisse gingen bei der Selektions-Ersetzung durch ein einzelnes `execCommand('insertText')` mit eingebettetem `\n` — das fügt Umbrüche als **reinen Text** ein, der im HTML-Editor nicht als Umbruch rendert. Der alte Pfad (`finalizeCEMultiline`) setzte `<br>`-Knoten; deshalb funktionierte v1.5.3 noch (1.5.4 wurde nie veröffentlicht, Store sprang 1.5.3 → 1.5.5).
 - **v1.5.6** kollabierte die Umbrüche versehentlich aktiv zu Leerzeichen (Anforderung falsch verstanden) — in v1.5.7 vollständig revertiert.
-- **Fix in v1.5.7**: `execInsertTextCE` fügt mehrzeilige Ergebnisse zeilenweise ein und setzt zwischen den Zeilen einen echten Umbruch per `execCommand('insertLineBreak')` (→ `<br>`), mit Fallback auf `insertParagraph`, falls die Engine `insertLineBreak` nicht kennt. Der Editing-Pipeline-Weg bleibt (Framework-Editoren wie Lexical/ProseMirror revertieren direkte DOM-Writes).
+- **Fix in v1.5.7**: `execInsertTextCE` fügt mehrzeilige Ergebnisse zeilenweise ein und setzt zwischen den Zeilen einen echten Umbruch per `execCommand('insertLineBreak')` (→ `<br>`), mit Fallback auf `insertParagraph`, falls die Engine `insertLineBreak` nicht kennt.
 
 Test: `test-insert-ce.js` (node) prüft die Kommando-Sequenz für Blink-, Gecko- und Legacy-Engine-Modelle (Multiline, Single-Line, Leerzeile, Empty-Payload).
 
@@ -53,48 +105,134 @@ Test: `test-insert-ce.js` (node) prüft die Kommando-Sequenz für Blink-, Gecko-
 - **Thunderbird-Pipeline**: `isThunderbirdUA()` (UA-Sniff, testbar via Parameter) macht `isFrameworkManagedCE()` im TB-Compose true → alle Writes laufen über `execInsertTextCE` (Editor-Transaktionen, Selection bleibt konsistent). Firefox/Chrome ohne Framework-Signale nehmen weiterhin die Direct-Write-Pfade.
 - **`finalizeCEState(el)`** (Defense in depth, wird in `finish`/`onError`/`onAborted` vor `cleanedSelection.delete` aufgerufen): entfernt Marker- **und** Range-Split-Fragmente (leere Textknoten), re-anchort die Live-Selection ans Ende des Ergebnisses (bzw. an die alte Selektionsstelle bei Leer-Ergebnis). `anchorCaretAtEnd()` deckt zusätzlich Ganzfeld (`innerText`) und Undo-Restore (`innerHTML`) ab.
 
-Test: `test-ce-finalize.js` (node) — UA-Erkennung, Pipeline-Routing und Cleanup (Marker-/Fragment-Entfernung, Caret-Positionen für Marker-, Leer- und Single-Node-Modus, No-Op ohne State). jsdom-Endzustands-Verifikation: `~/workspace/llm-tb-caret-debug/run-harness-e2e.js` (außerhalb des Repos, Nachweis 0 leere Knoten über 3 Läufe inkl. Wiederholungsersetzung).
+Test: `test-ce-finalize.js` (node). jsdom-Endzustands-Verifikation: `~/workspace/llm-tb-caret-debug/run-harness-e2e.js` (außerhalb des Repos).
 
 ### Gestapelte Text-Kopien bei Ganzfeld-Ersetzung (Fix seit v1.5.9)
 
 **Symptom (Bug):** In Thunderbird füllte sich der Mail-Body bei einer Aktion auf den gesamten Text mit wiederholten, von hinten schrumpfenden Kopien des Textes (jede Kopie endete einen Token früher; der korrekte finale Text stand am Ende).
 
-**Ursache:** Das Ganzfeld-Streaming schrieb bei jedem Token den kompletten Text neu — pro Token Select-All + `insertText` über die Editor-Pipeline (`execSetCEText`). Wenn die interne Selection des HTMLEditor veraltet war (z. B. nach dem Fokus-Wechsel durch das Compose-Toolbar-Popup), behandelte die Engine das Insert als Einfügen am Caret statt als Ersetzen: pro Token stapelte sich ein vollständiger Snapshot. Seit v1.5.8 routet TB alle CE-Writes über diese Pipeline, deshalb trat das Muster erst danach auf ("manchmal" — nur bei Aktionen ohne Auswahl; Selektionen puffern bereits bis zum Ende).
+**Ursache:** Das Ganzfeld-Streaming schrieb bei jedem Token den kompletten Text neu — pro Token Select-All + `insertText` über die Editor-Pipeline (`execSetCEText`). Wenn die interne Selection des HTMLEditor veraltet war (z. B. nach dem Fokus-Wechsel durch das Compose-Toolbar-Popup), behandelte die Engine das Insert als Einfügen am Caret statt als Ersetzen: pro Token stapelte sich ein vollständiger Snapshot.
 
 **Fix (v1.5.9), dreiteilig:**
-- **Ganzfeld-Streaming gepuffert**: `startFullTextReplacement` schreibt bei Framework-/TB-Editoren (`isFrameworkManagedCE`, inkl. UA-Check) nur EINMAL am Stream-Ende (`finish`/`onAborted`) statt pro Token. Normale CE-Felder behalten das Live-Streaming (billiges `innerText`-Schreiben ohne Editor-State).
-- **`applyChunk` (Framework-Zweig) einheitlich**: auch der Frozen-Modus (Selektion ohne Range) schreibt nur noch am Ende — kein per-Token Select-All mehr über `applyChunk`.
-- **`execSetCEText` gehärtet**: nach Select-All + `insertText` wird verifiziert, dass das Feld wirklich nur den neuen Text enthält. Falls die Engine eingefügt statt ersetzt hat (alter Content bleibt stehen), folgt ein Pipeline-Delete + ein Retry; scheitert auch das, Rückgabe `false` → Aufrufer fällt auf Direct-Write-Pfade zurück. Test: `test-exec-set-ce.js` (Replace-Engine ohne Korrekturschritt, Stack-Engine mit Detektion+Retry, Broken-Engine → `false`).
+- **Ganzfeld-Streaming gepuffert**: `startFullTextReplacement` schreibt bei Framework-/TB-Editoren (`isFrameworkManagedCE`, inkl. UA-Check) nur EINMAL am Stream-Ende (`finish`/`onAborted`) statt pro Token. Normale CE-Felder behalten das Live-Streaming.
+- **`applyChunk` (Framework-Zweig) einheitlich**: auch der Frozen-Modus (Selektion ohne Range) schreibt nur noch am Ende.
+- **`execSetCEText` gehärtet**: nach Select-All + `insertText` wird verifiziert, dass das Feld wirklich nur den neuen Text enthält. Falls die Engine eingefügt statt ersetzt hat, folgt ein Pipeline-Delete + ein Retry; scheitert auch das, Rückgabe `false` → Aufrufer fällt auf Direct-Write-Pfade zurück.
 
-Wirkung: Selektions- wie Ganzfeld-Aktionen in Thunderbird landen in genau einem Editor-Write; das Stapel-Muster kann nicht mehr entstehen.
+Test: `test-exec-set-ce.js` (Replace-Engine ohne Korrekturschritt, Stack-Engine mit Detektion+Retry, Broken-Engine → `false`).
 
 ### Fehlende Zeilenumbrüche bei Selektions-Ersetzung (Fix seit v1.5.10)
 
-**Symptom (Bug):** In Chrome wurden bei der Ersetzung einer mehrzeiligen Selektion die Zeilenumbrüche verworfen — das Ergebnis landete als eine Zeile im Feld (bereits seit v1.5.0, unabhängig vom v1.5.9-Fix).
+**Symptom (Bug):** In Chrome wurden bei der Ersetzung einer mehrzeiligen Selektion die Zeilenumbrüche verworfen — das Ergebnis landete als eine Zeile im Feld.
 
-**Ursache:** `getElementSelection` las den CE-Selektionstext per `range.toString()`. Laut DOM-Standard konkateniert das nur Textnodes — **ohne** `\n` an `<br>`- oder Blockgrenzen (anders: `Selection.toString()`). Mehrzeilige Selektionen erreichten das LLM also als eine Zeile, das Ergebnis entsprechend auch. Umstellung erfolgte in Commit `8cb1132`.
+**Ursache:** `getElementSelection` las den CE-Selektionstext per `range.toString()`. Laut DOM-Standard konkateniert das nur Textnodes — **ohne** `\n` an `<br>`- oder Blockgrenzen (anders: `Selection.toString()`).
 
 **Fix (v1.5.10):** `selection.toString()` statt `range.toString()` in `getElementSelection` (CE-Zweig).
 
-**Merkregel:** Der **Quelltext** einer Selektion (LLM-Input) muss Zeilenumbrüche enthalten — immer `selection.toString()` (oder INPUT/TEXTAREA-Substring). `range.toString()` niemals für Quelltext verwenden; nur wo bewusst nur sichtbarer Fließtext ohne Umbrüche gebraucht wird.
+**Merkregel:** Der **Quelltext** einer Selektion (LLM-Input) muss Zeilenumbrüche enthalten — immer `selection.toString()` (oder INPUT/TEXTAREA-Substring). `range.toString()` niemals für Quelltext verwenden.
 
 ### Free Prompt öffnet kein Fenster in Thunderbird (Fix seit v1.5.11)
 
 **Symptom (Bug):** In Thunderbird öffnete der „Free prompt"-Eintrag im Compose-Toolbar-Popup kein Chat-Fenster — der bestehende Mailtext wurde stattdessen direkt ersetzt.
 
-**Ursache:** Das Compose-Toolbar-Popup kann den Compose-Tab nicht direkt message'n (kein Tab-Kontext), daher leitet `background.js` den Klick als `composePopupTrigger` weiter — und `background.js` routet das als `{ action: "contextMenuProcess" }` an den Content-Script. Der `contextMenuProcess`-Handler in `content.js` kannte aber nur den Browser-Kontextmenü-Pfad (Selektions-Ersetzung) und schickte `textAction === "freePrompt"` ungeprüft in die **Ganzfeld-Ersetzungs-Pipeline** — deshalb Mailtext-Ersatz statt Chat. Im Browser trat der Bug nicht auf: dort kommt freePrompt ausschließlich über das Floating-Icon-Menü (direkt `openFreePromptChat()`) oder den Shortcut — der Browser-Kontextmenü bietet freePrompt nie an.
+**Ursache:** Das Compose-Toolbar-Popup kann den Compose-Tab nicht direkt message'n (kein Tab-Kontext), daher leitet `background.js` den Klick als `composePopupTrigger` weiter — und routet das als `{ action: "contextMenuProcess" }` an den Content-Script. Der Handler kannte aber nur den Browser-Kontextmenü-Pfad und schickte `textAction === "freePrompt"` ungeprüft in die **Ganzfeld-Ersetzungs-Pipeline**.
 
-**Fix (v1.5.11), im `contextMenuProcess`-Handler:** `textAction === "freePrompt"` short-circuitet vor der Ersetzungs-Pipeline: `uiSuspended = false` (Chat darf sich nach abgebrochenem Send wieder öffnen), Ziel-Feld per `resolveFreePromptTarget()` bestimmen, dann `openFreePromptChat()` — nie `handleContextMenuProcess()`.
+**Fix (v1.5.11):** `textAction === "freePrompt"` short-circuitet im `contextMenuProcess`-Handler **vor** `handleContextMenuProcess`: `uiSuspended = false`, Ziel-Feld per `resolveFreePromptTarget()`, dann `openFreePromptChat()`.
 
-**`resolveFreePromptTarget(live, remembered)`** (testbar extrahierbar): während das Toolbar-Popup offen ist, liegt der Fokus außerhalb des Compose-Dokuments, `document.activeElement` ist dann `<body>` — Priority daher wie in `handleContextMenuProcess`: aktives Textfeld zuerst, dann das zuletzt fokussierte Feld (`activeInputElement`), sonst `null` (Chat verweigert das Öffnen sauber — `openFreePromptChat()` gibt ohne `activeInputElement` leise auf, es wird **nie** ersetzt).
+**Merkregel:** Jede neue `textAction`, die über `contextMenuProcess` ankommt, muss im Content-Handler **vor** `handleContextMenuProcess` behandelt werden.
 
-Test: `test-free-prompt-route.js` (node) — Routing-Priority (Body/Live/Remembered/Null-Kombinationen) + Struktur-Check, dass der Guard im Handler vor der Pipeline liegt und den Chat öffnet.
+Test: `test-free-prompt-route.js` (node).
 
-### Build
+### Shadow-DOM-blinde Feld-Erkennung (Fix seit v1.5.12 — Reddit)
 
-XPI/ZIPs werden **nicht mehr manuell gebaut** — der Release-Workflow packt alle drei Pakete automatisch aus den Quellbäumen. Zum lokalen Testen (nicht für den Store!) die Dateien aus `Pub/thunderbird-build/` in Thunderbird über „Add-on aus Datei installieren" laden oder temporär packen.
+**Symptom (Bug):** Editoren in Shadow Roots (Reddits Lit-basierter Kommentar-Composer) wurden nie erkannt — das Floating-Icon erschien nicht.
 
-Installation: Thunderbird → Add-ons & Themes → Zahnrad → „Add-on aus Datei installieren" → `.xpi` wählen. Hinweis: Unsignierte XPIs akzeptiert nur die Release-Version von Thunderbird **nicht** standardmäßig — für dauerhafte Nutzung muss das Add-on über [addons.thunderbird.net](https://addons.thunderbird.net) signiert werden (oder in Daily/Beta bzw. mit `xpinstall.signatures.required=false` testen).
+**Ursache:** Der alte `MutationObserver` + `querySelectorAll`-Scan + Per-Feld-Focus-Listener sieht keine Elemente in Shadow Roots; `document.activeElement` retargetet auf den Shadow-Host.
+
+**Fix (v1.5.12):** EIN delegierter `focusin`-Listener auf dem Document (composed Event kreuzt Shadow-Grenzen), `findTextInputOnPath(e.composedPath())` für das echte innere Feld (deckt auch closed roots ab), `resolveEditingTarget()` (steigt `shadowRoot.activeElement` ab, Guard 32) als **der** Feld-Resolver für Shortcut/Kontextmenü/Free-Prompt/Legacy, `isNodeInDocument()` (`isConnected`) statt `document.contains()`.
+
+**Merkregel:** Keine `querySelectorAll`-Feld-Scans, keine Per-Feld-Focus-Listener und kein rohes `document.activeElement` zur Feld-Auflösung wieder einführen.
+
+### iframe-Editoren unsichtbar (Fix seit v1.5.13 — Teams)
+
+**Symptom (Bug):** Teams' Compose-Box liegt in einem iframe; ohne `all_frames` lief das Content-Script dort nie — kein Teams-Feld wurde **jemals** erkannt.
+
+**Fix (v1.5.13):** `all_frames` + `match_about_blank` im Root-Manifest **und** im Firefox-Overlay (TB braucht beides nicht — `scripting.compose.registerScripts` injiziert nativ in alle Compose-Frames). `background.js` routet frame-sensitiv: Selektions-Capture `frameIds: [info.frameId]`, `contextMenuProcess` mit `{ frameId: info.frameId }` als sendMessage-**Options-Argument** (3. Position: message, options, callback — ein Callback dort schluckt das Targeting still), content-originated Messages tragen `sender.frameId`, `injectReplacement` baut sein Target bedingt (nie `frameIds: undefined`).
+
+Test: `test-frame-routing.js` (node) — M-Gruppe (Manifeste), F-Gruppe (frame-sensitiver Routing-Pfad).
+
+### Teams: Icon sichtbar, Text nie ersetzt (Fix seit v1.5.14 — React)
+
+**Ursache:** Teams' Editor ist ein React-gerendertes `contenteditable` ohne Editor-Library-Signale → `isFrameworkManagedCE()` false → direkter `innerText`-Write → React reconciled aus seinem Modell und verwirft die unmodellierte Mutation.
+
+**Fix (v1.5.14), zweiteilig:**
+1. 6. Signal in `isFrameworkManagedCE()` — Framework-State-Präfix-Match (`__reactFiber$`, `__reactInternalInstance$`, `__vue__`, `__vueParentComponent`, `__ngContext__`) auf `Object.keys(el)` **und** dem direkten Parent (State sitzt oft auf einem Wrapper-div) → Pipeline-Routing + gepufferter Ganzfeld-Write.
+2. `replaceFullTextInElement()` CE-Zweig: Read-back-Verifikation via `readBackMatches()` (whitespace-normalisierter Vergleich; `beforeText`-Snapshot **muss vor** dem Write genommen werden), Sync-Check + verzögerter 350-ms-Check, Pipeline-Retry via `execSetCEText` nur wenn das Feld exakt den Pre-Replacement-Text zeigt.
+
+### Teams: CKEditor-Modell-Writes (Fix seit v1.5.15)
+
+**Ursache:** Teams' Compose ist CKEditor-basiert (`div[data-tid="ckeditor"]`), **nicht** Draft.js. CKEditor nimmt execCommand-Writes in den DOM, aber **nie** in sein Modell — perfekter DOM-Read-back, stiller Revert beim nächsten Render-Zyklus. DOM-Read-backs sind gegen das Modell strukturell blind.
+
+**Fix (v1.5.15):** Der einzige Eingabepfad, aus dem modell-besitzende Editoren ihr Modell neu aufbauen, ist ein synthetischer Paste (`ClipboardEvent` + `DataTransfer`, kein `isTrusted`-Check), davor DOM-Select-All + ~350 ms Pause (CK konvertiert DOM→Modell-Selektionen nur async/debounced). Gestaffelte, verifizierte Kette `scheduleFrameworkPasteWrite` (Stage 0 Sync-Pipeline → Gate; Stage 1 Select+Pause+Paste → Gate; Stage 2 Pipeline-Delete + Paste am Caret → Gate; Stage 3 Stop). `pasteWriteToken` bricht bei neuer Aktion/Undo ab. TB behält die Sync-Pipeline.
+
+**Editor-Polarität:** Draft.js ignoriert Paste an Modell-Position 0, akzeptiert aber execCommand; CKEditor ist umgekehrt.
+
+E2E: `~/workspace/llm-e2e/test-teams-editor.html` gegen echtes CKEditor 5.
+
+## v1.6.0 — Seitenkontext, Diff-Vorschau, Model-Liste
+
+Drei opt-in Features. Neue Storage-Keys: `contextEnabled` (bool, Default `false`),
+`pageContextChars` (String, Default `"600"`, `0` = aus), `confirmBeforeReplace`
+(bool, Default `false`). Alle drei stehen in `DEFAULT_KEYS` in **beiden**
+Background-Dateien. Der abgerufene Modell-Katalog liegt unter `modelsList` und ist
+**kein** `DEFAULT_KEYS`-Eintrag (Fetch-Cache, nie ein Formularfeld).
+
+### Seitenkontext im Free-Prompt-Chat
+
+- `collectPageContext(el, maxChars)` sammelt Seitentitel, URL und die Absätze direkt
+  um das Feld (je max. 4 Geschwister davor/danach, in Dokument-Reihenfolge).
+  Der Feldinhalt selbst wird **bewusst nicht** eingefügt — er ist bereits der
+  Chat-Kontext; Duplikate kosten nur Kontextfenster. `maxChars <= 0` → `""`.
+- `buildInitialChatMessages()` hängt den Kontext unter dem Key `contextIntroLabel`
+  an den System-Prompt — klar als Hintergrundinfo gelabelt, damit das Modell den
+  Seitentext nicht als Aufgabe missversteht.
+- Toggle sitzt im Chat-Header (`#llm-chat-context-toggle`, pro Sitzung), die
+  Options-Seite setzt Default + Zeichen-Cap. Default aus (Datenschutz).
+- Preset-Chips (`CHAT_PRESETS`, `createChatPresets`) füllen nur das Eingabefeld
+  und senden **nie** automatisch — bewusste Nutzersteuerung.
+
+### Diff-Vorschau vor dem Ersetzen
+
+- `diffWords(oldText, newText)` — Wort-Level-Diff per LCS-DP, ohne Abhängigkeit.
+  Oberhalb von 1200 Tokens pro Seite fällt sie auf einen `del`+`ins`-Block zurück
+  (Schutz vor riesigen Allokationen). `renderDiffInto()` markiert Entfernungen
+  rot-durchgestrichen, Ergänzungen grün.
+- `showDiffConfirm(old, neu, onApply, onDiscard)` zeigt das Overlay; `closeDiffOverlay(keepPending)`
+  räumt auf. `pendingConfirm` hält die Callbacks.
+- **Angeklemmt an alle drei Finish-Pfade:** `startFullTextReplacement.finish`,
+  `startSelectionReplacement.finish` (Discard stellt `originalFullText` wieder her —
+  das Live-Streaming hat das Feld vorher schon überschrieben) und `applyLastResult`
+  (Chat-Übernahme).
+- `confirmBeforeReplace` wird in `init()` in eine Content-Script-Variable gespiegelt
+  (storage get + `onChanged`), damit die Stream-Finish-Hot-Paths ohne async-Read
+  verzweigen können. **Weitere Confirm-Gates genauso spiegeln.**
+- Die Vorschau berührt die Ersetzungs-Pipeline **nicht** — sie verzögert nur den
+  bestehenden `finish`-Callback.
+
+### Model-Liste vom Endpunkt
+
+- `modelsUrlFromApiUrl(apiUrl)` leitet `GET <base>/models` ab (`…/v1/chat/completions`
+  → `…/v1/models`; sonst Basis + `/models`).
+- `fetchModelList(apiUrl, apiKey)` läuft im Background (nicht der CSP der Seite
+  unterworfen), 15-s-Timeout, akzeptiert `{data:[{id}]}`, `{models:[…]}` und ein
+  nacktes Array. Ein `TypeError` aus `fetch` ist fast immer CORS/DNS und wird
+  als solches gemeldet (`CORS/DNS (<url>)`) statt als nacktes „Failed to fetch".
+- In **beiden** Backgrounds implementiert und über die Runtime-Message `listModels`
+  erreichbar; die Options-Seite ruft es aus `fetchModels()` und füllt die
+  `<datalist id="modelList">` am Modellfeld.
+- Lokale Endpunkte brauchen CORS für die Extension-Origin (`--allow-origins` /
+  `OLLAMA_ORIGINS`) — sonst schlägt der Abruf trotz laufendem Server fehl.
+
+Test: `test-v16-features.js` (diffWords, modelsUrlFromApiUrl, collectPageContext).
 
 ## Mehrsprachigkeit (i18n)
 
@@ -112,12 +250,13 @@ Die Extension ist vollständig internationalisiert (aktuell Deutsch + Englisch).
 2. In JavaScript wird der Text über `chrome.i18n.getMessage(key, subst?)` geladen (Helper: `t(key)` in `content.js`/`options.js`/`background.js`).
 3. In HTML werden statische Texte über `data-i18n="key"` gesetzt (`options.js` wendet sie via `applyI18n()` an).
 4. **Platzhalter** werden in `messages.json` als `$NAME$` geschrieben und brauchen einen `placeholders`-Eintrag. Aufruf: `t('key', 'Wert')`.
-5. **Default-System-Prompts** sind ebenfalls locale-abhängig (`defaultPromptTranslate`, `defaultPromptExpand`, …) und werden zur Laufzeit aus den Messages gebaut — nicht hartcodiert in `DEFAULT_CONFIG`-Literalen ändern, sondern in beiden Locale-Dateien.
+5. **Default-System-Prompts** sind ebenfalls locale-abhängig (`defaultPromptTranslate`, `defaultPromptExpand`, …) und werden zur Laufzeit aus den Messages gebaut — nicht hartcodiert ändern, sondern in beiden Locale-Dateien.
 6. **Neue Sprache hinzufügen**: neuen Ordner `_locales/<code>/` mit vollständiger `messages.json` anlegen. Die Keys müssen exakt zu `de` und `en` passen (gleiche Menge, gleiche Platzhalter).
 
 ### Konsistenz-Check
 
-Nach Änderungen an Locales prüfen, dass alle genutzten Keys in allen Sprachen existieren:
+Die Locale-Key-Parität wird **vom Build geprüft** (`node tools/build.mjs` bricht bei
+Abweichung ab). Manuell:
 
 ```bash
 python3 -c "
@@ -161,24 +300,38 @@ Kanonische Form: `[Ctrl+][Alt+][Shift+][Meta+]<Key>`
 
 **Manuell wird nur die Version erhöht — alles andere macht die GitHub Action.**
 
-1. Version in **allen drei** Manifesten synchron erhöhen: `manifest.json`, `Pub/firefox-build/manifest.json`, `Pub/thunderbird-build/manifest.json`.
-2. Push auf `main`. Die GitHub Action (`.github/workflows/release.yml`, läuft auf dem GitHub-Spiegel `github.com/s1t5/LLM-Text-Assistant`, den Gitea per Push-Mirror synchronisiert) übernimmt:
-   - Pre-Flight-Checks: `node --check` auf alle JS-Dateien, JSON-Validierung und Versionssync aller drei Manifeste, `de`/`en`-Locale-Key-Abgleich, Build-Dirs synchron zum Root
-   - Paketierung aller drei Store-Pakete frisch aus den Quellbäumen (`<version>-chrome.zip` aus dem Root, `<version>-firefox.zip` aus `Pub/firefox-build/`, `<version>-thunderbird.xpi` aus `Pub/thunderbird-build/`)
-   - GitHub-Release (Tag/Name = Version, kein `v`-Präfix) mit den drei Paketen als Assets, veröffentlicht (kein Draft)
-3. Fix-Commits **ohne** Version-Bump überspringen den Release sauber („Tag existiert").
-4. Store-Uploads (Chrome Web Store, AMO, ATN) bleiben manuell: Pakete aus dem GitHub-Release herunterladen und in die Developer-Dashboards laden.
-
-**Keine versionierten ZIPs/XPI mehr in `Pub/` bauen** — die bis v1.5.7 vorhandenen sind historisch; das Release liefert die verlässlichen Pakete.
+1. Version **nur** im Root-`manifest.json` erhöhen (die Overlay-Manifeste tragen keine Version; der Build injiziert sie).
+2. Commit, Tag in Gitea erstellen, dann Branch **und** Tag in EINEM Befehl pushen:
+   ```bash
+   git tag <version>
+   git push https://s1t5:${GITEA_TOKEN}@git.schrrs.de/s1t5/LLM-Text-Assistant.git main refs/tags/<version>
+   ```
+   Der Tag **muss** Gitea-seitig entstehen — der Push-Mirror löscht GitHub-only-Tags (siehe Spiegel-Hinweis).
+3. Die GitHub Action (`.github/workflows/release.yml`, läuft auf dem GitHub-Spiegel) übernimmt:
+   - `test`-Job: alle `test-*.js` (bei jedem Push)
+   - `release`-Job: Build via `tools/build.mjs`, Paket-Verifikation, `gh release create` am gespiegelten Tag, veröffentlicht (kein Draft). Wird übersprungen, wenn für die Version schon ein Release existiert.
+4. Fix-Commits **ohne** Version-Bump überspringen den Release sauber.
+5. Store-Uploads (Chrome Web Store, AMO, ATN) bleiben manuell: Pakete aus dem GitHub-Release herunterladen und in die Developer-Dashboards laden.
 
 ### Manueller Store-Upload (aus dem GitHub-Release)
 
-Lade `<version>-chrome.zip` / `<version>-firefox.zip` / `<version>-thunderbird.xpi` aus dem jeweiligen GitHub-Release herunter:
+Lade `<version>-chrome.zip` / `<version>-firefox.zip` / `<version>-thunderbird.xpi` aus dem jeweiligen GitHub-Release:
 
-- **Chrome**: [Developer Dashboard](https://chrome.google.com/webstore/devconsole) → bestehendes Paket aktualisieren. Das Chrome-Manifest ist das im Repo-Root.
-- **Firefox (AMO)**: [addons.mozilla.org/developers](https://addons.mozilla.org/developers/) → bestehendes Add-on → neue Version hochladen. Firefox braucht das eigene Manifest aus `Pub/firefox-build/manifest.json` mit `browser_specific_settings.gecko.id` = `llm-text-assistent@s1t5.dev` (seit v1.5.0; ID-Mismatch lehnt AMO beim Review ab) und `data_collection_permissions.required: ["none"]`.
+- **Chrome**: [Developer Dashboard](https://chrome.google.com/webstore/devconsole) → bestehendes Paket aktualisieren.
+- **Firefox (AMO)**: [addons.mozilla.org/developers](https://addons.mozilla.org/developers/) → bestehendes Add-on → neue Version hochladen. Gecko-ID `llm-text-assistent@s1t5.dev` (seit v1.5.0; ID-Mismatch lehnt AMO beim Review ab) und `data_collection_permissions.required: ["none"]`.
 - **Thunderbird (ATN)**: [addons.thunderbird.net](https://addons.thunderbird.net) → Developer-Seite → neue Version hochladen (eigene Gecko-ID `llm-text-assistent-thunderbird@s1t5.dev`).
 
 ### Spiegel-Hinweis
 
-Der Workflow läuft auf dem GitHub-Spiegel; das Release erscheint mit kurzer Verzögerung nach dem Gitea-Push (Spiegel-Sync je Commit, zusätzlich 8-h-Intervall als Fallback). **Voraussetzung**: Das hinterlegte GitHub-Token braucht die Scopes `repo` **und** `workflow` — sonst lehnt GitHub Pushes mit Workflow-Änderungen ab und der Spiegel bleibt stehen (passiert bei v1.5.6/1.5.7; im Gitea-WebUI unter Repository → Einstellungen → Mirrors im `last_error` sichtbar).
+Der Workflow läuft auf dem GitHub-Spiegel; das Release erscheint mit kurzer Verzögerung
+nach dem Gitea-Push (Spiegel-Sync je Commit, zusätzlich 8-h-Intervall als Fallback).
+
+**Tag-Falle:** Der Gitea→GitHub-Push-Mirror **löscht** Refs, die nur auf der
+GitHub-Seite existieren. Tags, die dort per `gh release create` entstehen, wurden beim
+nächsten Sync entfernt — die Release-Tags 1.5.8–1.5.11 verschwanden so und die Releases
+degradierten zu unsichtbaren Drafts, während CI grün blieb. Deshalb: Tag immer in Gitea
+erstellen und mitpushen (Schritt 2).
+
+**Token-Scopes:** Das hinterlegte GitHub-Token braucht `repo` **und** `workflow` — sonst
+lehnt GitHub Pushes mit Workflow-Änderungen ab und der Spiegel bleibt stehen (im
+Gitea-WebUI unter Repository → Einstellungen → Mirrors im `last_error` sichtbar).
