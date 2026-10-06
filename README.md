@@ -21,7 +21,7 @@
 - **Review before replacing** (optional): Show an old→new diff and only write the result after you confirm it
 
 ### ⌨️ Shortcuts & UX
-- **Keyboard shortcuts**: Assign shortcuts to built-in actions, custom actions and the free prompt, triggered only while a text field is focused, always wins over page shortcuts
+- **Keyboard shortcuts**: Assign shortcuts to built-in actions, custom actions and the free prompt — triggered only while a text field is focused, and they always win over page shortcuts (a `document_start` guard registers the first capture listener on `window`, so a matched combination never reaches the page — not even window-level or keyup-based page handlers)
 - **Undo toast**: After every replacement a toast appears with an **Undo** button (8 seconds, hover pauses the timer)
 - **Cancel requests**: Abort a running request by clicking the loading icon (⏳) or the stop button in chat, already received text is kept
 - **Robust error handling**: Configurable timeout (default 60s), automatic retries on network errors and rate limits (429/5xx), clear error messages (e.g. "check your API key" on 401)
@@ -137,7 +137,7 @@ You can also:
 
 ### Repository structure (trunk + platform overlays)
 
-The `main` branch holds **all shared sources** (content.js, background.js, options, locales, icons) plus the canonical `manifest.json` — the only place the version number lives. Platform-specific files live as overlays:
+The `main` branch holds **all shared sources** (content.js, shortcuts.js, background.js, options, locales, icons) plus the canonical `manifest.json` — the only place the version number lives. Platform-specific files live as overlays:
 
 ```
 manifest.json                    ← Chrome manifest (canonical version)

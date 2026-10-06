@@ -44,6 +44,7 @@ node test-exec-set-ce.js       # Ganzfeld-Write-Verifikation (Replace/Stack/Brok
 node test-free-prompt-route.js # contextMenuProcess-Routing + Focus-Erkennung
 node test-frame-routing.js     # all_frames + frame-sensitiver Message-Routing
 node test-v16-features.js      # diffWords, modelsUrlFromApiUrl, collectPageContext
+node test-shortcut-priority.js # document_start-Guard: Shortcut-Priorität, Swallow-Logik, Hook-Vertrag
 ```
 
 Die Tests slicen die Funktionen per String-Slicing aus den ausgelieferten Quellen und
@@ -268,6 +269,57 @@ Fehler beim Entwickeln auf Gecko nicht auffiel.
 **Regel:** Jeder `$NAME$`-Token braucht einen `placeholders`-Eintrag in **beiden** Sprachen.
 Nach jeder Locale-Änderung `node tools/build.mjs --no-zip && python3 tools/chrome-load-check.py`.
 
+## v1.6.3 — Tastenkürzel gewinnen immer (document_start-Guard)
+
+**Symptom:** Auf Seiten mit eigenen Shortcuts löste das Add-in-Kürzel nicht (oder nicht
+zuverlässig) aus — die Seite hatte Vorrang.
+
+**Ursache:** Der Listener hing auf `document` in der Capture-Phase und wurde erst bei
+`document_end` registriert. Damit verliert er in drei Fällen:
+
+1. **`window` schlägt `document`**: Die Capture-Reihenfolge ist `window` → `document` →
+   Ziel. Ein Seiten-Listener auf `window` (Capture) läuft immer vor jedem
+   `document`-Listener — unabhängig vom Registrierungszeitpunkt. Ruft er zusätzlich
+   `stopPropagation()`, sieht der Content-Script-Listener das Event nie.
+2. **Registrierungsreihenfolge auf demselben Knoten**: Seiten-Skripte laufen vor
+   `document_end`; ein Seiten-Listener auf `document` (Capture) war also zuerst dran.
+3. **`stopPropagation()` ≠ `stopImmediatePropagation()`**: `stopPropagation()` stoppt nur
+   die weitere Ausbreitung, nicht die restlichen Listener **auf demselben Knoten**. Ein
+   vorher registrierter Seiten-Listener auf demselben Knoten läuft trotzdem.
+
+**Fix (v1.6.3):** Neues Root-Script `shortcuts.js`, per zweitem `content_scripts`-Eintrag
+mit `run_at: "document_start"` (vor **jedem** Seiten-Skript) in allen Frames injiziert.
+Es ist damit der **erste** Listener auf `window` in der Capture-Phase — die früheste
+Position im Ausbreitungspfad überhaupt.
+
+- **Rollenverteilung:** `shortcuts.js` besitzt nur das **Verschlucken**, `content.js`
+  weiterhin die **Entscheidung** (Aktions-Config + Feld-Erkennung). Da beide im selben
+  Isolated World laufen, übergibt `content.js` seinen Handler als globales
+  `globalThis.__llmShortcutGuard`; der Guard ruft ihn bei jedem keydown auf.
+- **Hook-Vertrag:** `handleShortcutKeydown(e)` gibt jetzt den getroffenen Kürzel-String
+  zurück (sonst `null`). Nur ein truthy Ergebnis lässt den Guard das Event konsumieren
+  (`preventDefault` + `stopImmediatePropagation`). Ohne fokussiertes Textfeld, bei
+  ungebundenen Kombinationen und solange der Hook noch nicht installiert ist, bleibt der
+  Guard ein No-op — die Seite behält ihre eigenen Kürzel.
+- **keyup wird mitverschluckt:** Seiten, die Shortcuts auf `keyup` implementieren
+  (Mousetrap-Stil), verlieren ebenfalls. Gemerkt wird nur die tatsächlich konsumierte
+  Kombination; `window`-`blur` setzt sie zurück.
+- **Fallback bleibt:** `content.js` registriert seinen eigenen Listener jetzt auf
+  `window` (Capture) statt `document` und nutzt zusätzlich
+  `stopImmediatePropagation()`. Das deckt Targets ohne den Guard ab (Thunderbird-
+  Compose-Skripte, alte Builds) und fängt den Zeitraum bis zur Hook-Installation ab.
+- **Thunderbird:** Der Guard wird als eigener Compose-Script-Eintrag mit
+  `runAt: "document_start"` registriert (vor `content.js`, das `document_idle` behält).
+  `registerScripts` ist **all-or-nothing** — schlägt die Guard-Registrierung fehl, wird
+  ohne Guard erneut registriert, damit Compose nicht komplett ausfällt.
+
+**Tests:** `node test-shortcut-priority.js` (Manifest-`document_start`, Guard-Swallow für
+keydown+keyup über ein Event-Ausbreitungsmodell, Hook-Vertrag, TB-Registrierung).
+Echte-Browser-E2E (Chromium headless, Szenario A/B):
+`~/workspace/llm-e2e/shortcut-guard-a.html` (Guard zuerst → Seite sieht den Keydown nicht)
+und `shortcut-guard-b.html` (Seite zuerst → Seite gewinnt; belegt, warum `document_start`
+nötig ist). Lauf: `chrome --headless=new --dump-dom file://…/shortcut-guard-a.html`.
+
 ## Mehrsprachigkeit (i18n)
 
 Die Extension ist vollständig internationalisiert (aktuell Deutsch + Englisch).
@@ -336,7 +388,8 @@ Kanonische Form: `[Ctrl+][Alt+][Shift+][Meta+]<Key>`
 
 ### Verhalten
 
-- Der `keydown`-Listener in `content.js` läuft in der **Capture-Phase** und ruft bei einem Treffer `preventDefault()` + `stopPropagation()` auf (Extension-Kürzel gewinnt immer).
+- **Priorität (seit v1.6.3):** `shortcuts.js` läuft per `run_at: "document_start"` vor jedem Seiten-Skript und ist damit der **erste** Capture-Listener auf `window`. Trifft eine Add-in-Kombination bei fokussiertem Textfeld, wird sie mit `preventDefault()` + `stopImmediatePropagation()` konsumiert — die Seite sieht das Event gar nicht, auch nicht auf `keyup`. Details: Abschnitt „v1.6.3".
+- `content.js` behält seinen Listener als **Fallback** (jetzt ebenfalls `window`, Capture-Phase) und stellt dem Guard die Entscheidung über `globalThis.__llmShortcutGuard` bereit.
 - Shortcuts werden **nur ausgelöst**, wenn ein Textfeld (`INPUT`, `TEXTAREA`, `contenteditable`) fokussiert ist.
 - Das schwebende Menü zeigt konfigurierte Kürzel rechtsbündig neben dem Aktionsnamen an.
 

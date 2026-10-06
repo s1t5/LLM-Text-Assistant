@@ -104,7 +104,7 @@ function listZip(pkg) {
 // ------------------------------------------------------------ shared sources
 
 // Files every target needs, straight from the repo root.
-const sharedFiles = ['background.js', 'content.js', 'options.html', 'options.js'];
+const sharedFiles = ['background.js', 'content.js', 'shortcuts.js', 'options.html', 'options.js'];
 const sharedDirs = ['icons', '_locales'];
 
 // ------------------------------------------------------------ target matrix
