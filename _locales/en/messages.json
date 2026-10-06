@@ -368,5 +368,83 @@
   "freePromptContextIntro": {
     "message": "The user has loaded the following text from their input field as context. Refer to this text for all instructions:",
     "description": "Context intro for free prompt system message"
+  },
+  "optionsFetchModels": {
+    "message": "Load models"
+  },
+  "optionsModelsLoading": {
+    "message": "Loading models…"
+  },
+  "optionsModelsLoaded": {
+    "message": "$COUNT$ models found"
+  },
+  "optionsModelsError": {
+    "message": "Could not load models: "
+  },
+  "optionsModelsNeedUrl": {
+    "message": "Enter an API URL first."
+  },
+  "optionsContextToggle": {
+    "message": "Pass page context to the chat"
+  },
+  "optionsContextDesc": {
+    "message": "Also gives the free prompt the page title, URL and the surrounding paragraphs. The switch in the chat window can be toggled per session."
+  },
+  "optionsPageContextChars": {
+    "message": "Max page-context characters"
+  },
+  "optionsPageContextCharsHint": {
+    "message": "0 = no context. Higher values give the model more surroundings but consume context window."
+  },
+  "optionsSafety": {
+    "message": "Safety"
+  },
+  "optionsConfirmToggle": {
+    "message": "Confirm result before replacing"
+  },
+  "optionsConfirmDesc": {
+    "message": "Shows a comparison (old → new) after every action and only replaces the text once you click \"Apply\". Off by default: the result is inserted directly and can be reverted via the undo toast."
+  },
+  "chatContextToggle": {
+    "message": "Page context"
+  },
+  "chatPresetsLabel": {
+    "message": "Presets"
+  },
+  "chatPresetShorter": {
+    "message": "Shorter"
+  },
+  "chatPresetFormal": {
+    "message": "More formal"
+  },
+  "chatPresetEmail": {
+    "message": "As email"
+  },
+  "chatPresetBullets": {
+    "message": "Bullet list"
+  },
+  "diffTitle": {
+    "message": "Review changes"
+  },
+  "diffBefore": {
+    "message": "Before"
+  },
+  "diffAfter": {
+    "message": "After"
+  },
+  "diffApply": {
+    "message": "Apply"
+  },
+  "diffDiscard": {
+    "message": "Discard"
+  },
+  "diffEmpty": {
+    "message": "(empty)"
+  },
+  "diffNoChange": {
+    "message": "No changes — text stays unchanged."
+  },
+  "contextIntroLabel": {
+    "message": "Page context (background information only, not part of the task):"
   }
 }

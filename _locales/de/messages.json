@@ -368,5 +368,83 @@
   "freePromptContextIntro": {
     "message": "Der Nutzer hat folgenden Text aus seinem Eingabefeld als Kontext geladen. Beziehe dich bei allen Anweisungen auf diesen Text:",
     "description": "Context intro for free prompt system message"
+  },
+  "optionsFetchModels": {
+    "message": "Modelle laden"
+  },
+  "optionsModelsLoading": {
+    "message": "Modelle werden geladen…"
+  },
+  "optionsModelsLoaded": {
+    "message": "$COUNT$ Modelle gefunden"
+  },
+  "optionsModelsError": {
+    "message": "Modelle konnten nicht geladen werden: "
+  },
+  "optionsModelsNeedUrl": {
+    "message": "Bitte zuerst eine API-URL eintragen."
+  },
+  "optionsContextToggle": {
+    "message": "Seitenkontext an den Chat übergeben"
+  },
+  "optionsContextDesc": {
+    "message": "Gibt dem freien Prompt zusätzlich Seitentitel, URL und die umliegenden Absätze mit. Der Schalter im Chat-Fenster lässt sich pro Sitzung umlegen."
+  },
+  "optionsPageContextChars": {
+    "message": "Max. Zeichen Seitenkontext"
+  },
+  "optionsPageContextCharsHint": {
+    "message": "0 = kein Kontext. Höhere Werte geben dem Modell mehr Umgebung, kosten aber Kontextfenster."
+  },
+  "optionsSafety": {
+    "message": "Sicherheit"
+  },
+  "optionsConfirmToggle": {
+    "message": "Ergebnis vor dem Ersetzen bestätigen"
+  },
+  "optionsConfirmDesc": {
+    "message": "Zeigt nach jeder Aktion einen Vergleich (alt → neu) und ersetzt den Text erst nach Klick auf \"Übernehmen\". Standardmäßig aus: das Ergebnis wird direkt eingesetzt und kann über den Undo-Toast zurückgenommen werden."
+  },
+  "chatContextToggle": {
+    "message": "Seitenkontext"
+  },
+  "chatPresetsLabel": {
+    "message": "Vorlagen"
+  },
+  "chatPresetShorter": {
+    "message": "Kürzer"
+  },
+  "chatPresetFormal": {
+    "message": "Formeller"
+  },
+  "chatPresetEmail": {
+    "message": "Als E-Mail"
+  },
+  "chatPresetBullets": {
+    "message": "Bullet-Liste"
+  },
+  "diffTitle": {
+    "message": "Änderungen prüfen"
+  },
+  "diffBefore": {
+    "message": "Vorher"
+  },
+  "diffAfter": {
+    "message": "Nachher"
+  },
+  "diffApply": {
+    "message": "Übernehmen"
+  },
+  "diffDiscard": {
+    "message": "Verwerfen"
+  },
+  "diffEmpty": {
+    "message": "(leer)"
+  },
+  "diffNoChange": {
+    "message": "Keine Änderungen — Text bleibt unverändert."
+  },
+  "contextIntroLabel": {
+    "message": "Seitenkontext (nur Hintergrundinfo, nicht Teil der Aufgabe):"
   }
 }

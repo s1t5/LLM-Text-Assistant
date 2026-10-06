@@ -26,8 +26,77 @@ function buildDefaultConfig() {
 const DEFAULT_KEYS = [
   "apiUrl", "apiKey", "model", "temperature", "timeoutSeconds", "targetLanguage",
   "promptTranslate", "promptExpand", "promptSummarize", "promptGrammar",
-  "customActions", "freePromptEnabled", "builtinShortcuts", "freePromptShortcut"
+  "customActions", "freePromptEnabled", "builtinShortcuts", "freePromptShortcut",
+  "contextEnabled", "pageContextChars", "confirmBeforeReplace"
 ];
+
+// Derive the model-list endpoint from a chat-completions URL.
+// "…/v1/chat/completions" → "…/v1/models"; any other path keeps its base and
+// gets "/models" appended, so Ollama/LM Studio/llama.cpp all work.
+function modelsUrlFromApiUrl(apiUrl) {
+  const url = String(apiUrl || "").trim();
+  if (!url) return "";
+  if (/\/chat\/completions\/?$/i.test(url)) {
+    return url.replace(/\/chat\/completions\/?$/i, "/models");
+  }
+  if (/\/completions\/?$/i.test(url)) {
+    return url.replace(/\/completions\/?$/i, "/models");
+  }
+  return url.replace(/\/+$/, "") + "/models";
+}
+
+// GET <endpoint>/models and return the sorted model ids. Runs in the
+// background so the request is not subject to the page's CSP; the endpoint's
+// own CORS headers still apply (local servers often need --allow-origins or
+// OLLAMA_ORIGINS). A TypeError from fetch is almost always CORS/DNS, so it is
+// reported as such instead of a bare "Failed to fetch".
+async function fetchModelList(apiUrl, apiKey) {
+  const url = modelsUrlFromApiUrl(apiUrl);
+  if (!url) throw new Error(t("optionsModelsNeedUrl"));
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
+  let response;
+  try {
+    response = await fetch(url, {
+      method: "GET",
+      headers: {
+        "Accept": "application/json",
+        ...(apiKey ? { "Authorization": `Bearer ${apiKey}` } : {})
+      },
+      signal: controller.signal
+    });
+  } catch (err) {
+    clearTimeout(timeoutId);
+    if (err.name === "AbortError") {
+      throw new Error(t("optionsModelsError") + "timeout");
+    }
+    throw new Error(t("optionsModelsError") + "CORS/DNS (" + url + ")");
+  }
+  clearTimeout(timeoutId);
+
+  if (!response.ok) {
+    throw new Error(t("optionsModelsError") + "HTTP " + response.status);
+  }
+
+  let data;
+  try {
+    data = await response.json();
+  } catch (e) {
+    throw new Error(t("optionsModelsError") + "invalid JSON");
+  }
+
+  // OpenAI shape: { data: [{ id }] }. Ollama's /v1/models matches. Some
+  // servers return { models: [...] } — accept both.
+  const raw = Array.isArray(data) ? data
+    : (Array.isArray(data.data) ? data.data
+      : (Array.isArray(data.models) ? data.models : []));
+  const ids = raw
+    .map((m) => (typeof m === "string" ? m : (m && (m.id || m.name)) || ""))
+    .filter((s) => typeof s === "string" && s.trim())
+    .map((s) => s.trim());
+  return Array.from(new Set(ids)).sort();
+}
 
 // --- Built-in action definitions (titles resolved at runtime) ---
 
@@ -214,6 +283,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "loadActions") {
     loadActionsForContent()
       .then((actions) => sendResponse({ success: true, actions }))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (request.action === "listModels") {
+    fetchModelList(request.apiUrl, request.apiKey)
+      .then((models) => sendResponse({ success: true, models }))
       .catch((err) => sendResponse({ success: false, error: err.message }));
     return true;
   }

@@ -104,6 +104,10 @@
     chatStreamingText = "";
     chatSendBtn = null;
     chatInputField = null;
+    diffOverlay = null;
+    pendingConfirm = null;
+    chatContextText = "";
+    chatContextEnabled = false;
     if (uiHost) {
       try { uiHost.remove(); } catch (e) { /* ignore */ }
     }
@@ -325,6 +329,17 @@
   function init() {
     loadActions();
 
+    // Mirror the "confirm before replacing" setting so the hot paths
+    // (stream finish, chat apply) can branch without an async storage read.
+    chrome.storage.sync.get({ confirmBeforeReplace: false }, (settings) => {
+      confirmBeforeReplace = settings.confirmBeforeReplace === true;
+    });
+    chrome.storage.onChanged.addListener((changes, namespace) => {
+      if (namespace === 'sync' && changes.confirmBeforeReplace) {
+        confirmBeforeReplace = changes.confirmBeforeReplace.newValue === true;
+      }
+    });
+
     // Focus tracking: one delegated focusin listener on the document catches
     // every text field gaining focus, including editors inside (open or
     // closed) shadow trees — focusin is a composed event and composedPath()
@@ -459,6 +474,11 @@
     // Check if click is on the chat window
     const chatContainer = getUiElementById('llm-chat-overlay');
     if (chatContainer && (chatContainer === target || chatContainer.contains(target))) {
+      return;
+    }
+
+    // Check if click is on the diff preview overlay
+    if (diffOverlay && (diffOverlay === target || diffOverlay.contains(target))) {
       return;
     }
 
@@ -1538,11 +1558,25 @@
     const finish = (finalText) => {
       hideProcessingIndicator();
       currentRequestId = null;
-      replaceFullTextInElement(el, finalText);
-      showUndoToast();
-      activeInputElement = el;
-      lastProcessedElement = null;
-      showFloatingIcon();
+      const applyResult = () => {
+        replaceFullTextInElement(el, finalText);
+        showUndoToast();
+        activeInputElement = el;
+        lastProcessedElement = null;
+        showFloatingIcon();
+      };
+      if (confirmBeforeReplace) {
+        // Preview first; the field is only touched after confirmation.
+        showDiffConfirm(text, finalText, applyResult, () => {
+          // Discarded: nothing was written, so drop the captured undo state.
+          lastUndoState = null;
+          activeInputElement = el;
+          lastProcessedElement = null;
+          showFloatingIcon();
+        });
+        return;
+      }
+      applyResult();
     };
 
     const requestId = startActionStream(textAction, text, true, {
@@ -1732,11 +1766,39 @@
     const finish = (finalText) => {
       hideProcessingIndicator();
       currentRequestId = null;
+      const finalChunk = finalText || accumulated;
       // Apply the final chunk FIRST (uses the in-place state with its valid
       // before/after boundaries), *then* close out the state. Reversing this
       // order makes the final apply re-splice with stale original indices and
       // eats characters after the selection when the result is shorter.
-      applyChunk(finalText || accumulated, true);
+      //
+      // With "confirm before replacing" on, the finished result is previewed
+      // instead: nothing is written until the user clicks Übernehmen, and a
+      // discard removes the already-streamed partial result again.
+      if (confirmBeforeReplace) {
+        showDiffConfirm(rawText, finalChunk, () => {
+          applyChunk(finalChunk, true);
+          finalizeCEState(el);
+          cleanedSelection.delete(el);
+          showUndoToast();
+          activeInputElement = el;
+          lastProcessedElement = null;
+          showFloatingIcon();
+        }, () => {
+          // Discard: restore the original content the streaming wrote over.
+          const state = cleanedSelection.get(el);
+          if (state) state.completed = true;
+          replaceFullTextInElement(el, originalFullText || '');
+          finalizeCEState(el);
+          cleanedSelection.delete(el);
+          lastUndoState = null;
+          activeInputElement = el;
+          lastProcessedElement = null;
+          showFloatingIcon();
+        });
+        return;
+      }
+      applyChunk(finalChunk, true);
       // Remove marker nodes / re-anchor the caret before dropping the state
       // (finalizeCEState reads it). No-op for pipeline and range modes.
       finalizeCEState(el);
@@ -2217,6 +2279,218 @@
   }
 
   // =====================================================================
+  //  DIFF PREVIEW (optional confirmation before replacing)
+  // =====================================================================
+  // When the user enables "confirm before replacing", every finished result
+  // is shown as an old→new comparison first and only written to the field
+  // after an explicit click. The preview never touches the replacement
+  // pipeline: it simply defers the existing finish callback.
+
+  let confirmBeforeReplace = false;   // mirror of the stored setting
+  let diffOverlay = null;
+  let pendingConfirm = null;          // {onApply} while an overlay is open
+
+  // Word-level diff between two strings. Returns segments with a flag so the
+  // renderer can mark removals/additions. LCS on word tokens (whitespace
+  // preserved by splitting on boundaries) keeps it dependency-free and fast
+  // for the text sizes an input field holds.
+  function diffWords(oldText, newText) {
+    const tokenize = (s) => String(s).match(/\s+|[^\s]+/g) || [];
+    const a = tokenize(oldText);
+    const b = tokenize(newText);
+
+    // LCS table (classic DP). Bounded: fields are small; guard against
+    // pathological sizes to avoid a huge allocation.
+    const MAX = 1200;
+    if (a.length > MAX || b.length > MAX) {
+      return [
+        { type: 'del', text: String(oldText) },
+        { type: 'ins', text: String(newText) }
+      ];
+    }
+
+    const n = a.length, m = b.length;
+    const dp = [];
+    for (let i = 0; i <= n; i++) dp.push(new Uint32Array(m + 1));
+    for (let i = n - 1; i >= 0; i--) {
+      for (let j = m - 1; j >= 0; j--) {
+        dp[i][j] = (a[i] === b[j])
+          ? dp[i + 1][j + 1] + 1
+          : Math.max(dp[i + 1][j], dp[i][j + 1]);
+      }
+    }
+
+    const out = [];
+    const push = (type, text) => {
+      if (!text) return;
+      const last = out[out.length - 1];
+      if (last && last.type === type) last.text += text;
+      else out.push({ type, text });
+    };
+
+    let i = 0, j = 0;
+    while (i < n && j < m) {
+      if (a[i] === b[j]) { push('eq', a[i]); i++; j++; }
+      else if (dp[i + 1][j] >= dp[i][j + 1]) { push('del', a[i]); i++; }
+      else { push('ins', b[j]); j++; }
+    }
+    while (i < n) { push('del', a[i]); i++; }
+    while (j < m) { push('ins', b[j]); j++; }
+    return out;
+  }
+
+  function renderDiffInto(container, oldText, newText) {
+    container.textContent = '';
+    const segments = diffWords(oldText, newText);
+    const onlyEqual = segments.every((s) => s.type === 'eq');
+
+    if (onlyEqual) {
+      const note = document.createElement('div');
+      note.textContent = t('diffNoChange');
+      Object.assign(note.style, { color: '#888', fontStyle: 'italic', padding: '8px 0' });
+      container.appendChild(note);
+      return;
+    }
+
+    for (const seg of segments) {
+      const span = document.createElement('span');
+      // Collapse whitespace-only segments to a plain space so the diff stays
+      // readable instead of showing huge runs of spaces.
+      span.textContent = /^\s+$/.test(seg.text) ? ' ' : seg.text;
+      if (seg.type === 'del') {
+        Object.assign(span.style, {
+          backgroundColor: '#fdecea',
+          color: '#b3261e',
+          textDecoration: 'line-through'
+        });
+      } else if (seg.type === 'ins') {
+        Object.assign(span.style, { backgroundColor: '#e6f4ea', color: '#137333' });
+      }
+      container.appendChild(span);
+    }
+  }
+
+  // Show the old→new comparison. `onApply` runs only when the user confirms;
+  // `onDiscard` (optional) runs on cancel. Never called when the setting is off.
+  function showDiffConfirm(oldText, newText, onApply, onDiscard) {
+    if (uiSuspended) { onApply(); return; }
+    closeDiffOverlay(true);
+
+    const overlay = document.createElement('div');
+    overlay.id = 'llm-diff-overlay';
+    Object.assign(overlay.style, {
+      position: 'fixed',
+      bottom: '20px',
+      right: '20px',
+      width: '480px',
+      maxHeight: '70vh',
+      backgroundColor: '#ffffff',
+      borderRadius: '12px',
+      boxShadow: '0 8px 32px rgba(0,0,0,0.25)',
+      zIndex: '2147483647',
+      display: 'flex',
+      flexDirection: 'column',
+      fontFamily: 'system-ui, -apple-system, sans-serif',
+      fontSize: '13px',
+      overflow: 'hidden',
+      border: '1px solid #d0d7de'
+    });
+
+    const header = document.createElement('div');
+    header.textContent = t('diffTitle');
+    Object.assign(header.style, {
+      padding: '10px 16px',
+      backgroundColor: '#4a90d9',
+      color: '#fff',
+      fontWeight: '600',
+      fontSize: '14px'
+    });
+    overlay.appendChild(header);
+
+    const body = document.createElement('div');
+    Object.assign(body.style, {
+      padding: '12px 16px',
+      overflowY: 'auto',
+      whiteSpace: 'pre-wrap',
+      lineHeight: '1.5',
+      color: '#2c3e50'
+    });
+    renderDiffInto(body, oldText, newText);
+    overlay.appendChild(body);
+
+    const footer = document.createElement('div');
+    Object.assign(footer.style, {
+      display: 'flex',
+      justifyContent: 'flex-end',
+      gap: '8px',
+      padding: '10px 16px',
+      borderTop: '1px solid #eee'
+    });
+
+    const discardBtn = document.createElement('button');
+    discardBtn.textContent = t('diffDiscard');
+    Object.assign(discardBtn.style, {
+      padding: '7px 14px',
+      backgroundColor: '#e2e8f0',
+      color: '#2c3e50',
+      border: 'none',
+      borderRadius: '6px',
+      cursor: 'pointer',
+      fontWeight: '500',
+      fontSize: '13px'
+    });
+    discardBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const cb = pendingConfirm && pendingConfirm.onDiscard;
+      closeDiffOverlay();
+      if (cb) cb();
+    });
+
+    const applyBtn = document.createElement('button');
+    applyBtn.textContent = t('diffApply');
+    Object.assign(applyBtn.style, {
+      padding: '7px 18px',
+      backgroundColor: '#2ecc71',
+      color: '#fff',
+      border: 'none',
+      borderRadius: '6px',
+      cursor: 'pointer',
+      fontWeight: '600',
+      fontSize: '13px'
+    });
+    applyBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const cb = pendingConfirm && pendingConfirm.onApply;
+      closeDiffOverlay();
+      if (cb) cb();
+    });
+
+    footer.appendChild(discardBtn);
+    footer.appendChild(applyBtn);
+    overlay.appendChild(footer);
+
+    // Clicks inside must never bubble to the page's outside-click handler.
+    overlay.addEventListener('mousedown', (e) => e.stopPropagation());
+    overlay.addEventListener('click', (e) => e.stopPropagation());
+
+    pendingConfirm = { onApply, onDiscard };
+    diffOverlay = overlay;
+    appendUi(overlay);
+  }
+
+  // `keepPending` keeps the callbacks when the overlay is torn down for a
+  // rebuild; normal closes clear them.
+  function closeDiffOverlay(keepPending) {
+    if (diffOverlay) {
+      diffOverlay.remove();
+      diffOverlay = null;
+    }
+    if (!keepPending) pendingConfirm = null;
+  }
+
+  // =====================================================================
   //  FREE PROMPT CHAT WINDOW
   // =====================================================================
 
@@ -2227,9 +2501,80 @@
   let chatStreamingText = "";
   let chatSendBtn = null;
   let chatInputField = null;
+  let chatContextEnabled = false;   // effective value for the current chat session
+  let chatContextText = "";         // collected page context (empty when disabled)
 
   function getFreePromptSystem() {
     return t('freePromptSystem');
+  }
+
+  // --- Page context for the free-prompt chat ---------------------------------
+  // Beyond the field's own text, the chat can receive the page's title, URL
+  // and the paragraphs around the edited field. That is what makes prompts
+  // like "shorten this" work on a page whose surrounding text carries the
+  // meaning. Off by default (privacy): the switch in the chat header toggles
+  // it per session, the options page sets the default and the character cap.
+
+  function normalizeCtxText(s) {
+    return String(s || '').replace(/\s+/g, ' ').trim();
+  }
+
+  // Title + URL + text before/after the field, capped to `maxChars` (0 = off).
+  // The field's own content is deliberately excluded — it is already the chat
+  // context, including it twice would only waste context window.
+  function collectPageContext(el, maxChars) {
+    const limit = parseInt(maxChars, 10);
+    if (!limit || limit <= 0) return "";
+
+    const parts = [];
+    try {
+      if (document.title && document.title.trim()) {
+        parts.push('TITLE: ' + document.title.trim());
+      }
+    } catch (e) { /* ignore */ }
+    try {
+      if (location && location.href) parts.push('URL: ' + location.href);
+    } catch (e) { /* ignore */ }
+
+    // Siblings before / after the field, nearest first, then reversed so the
+    // "before" part reads in document order. Only the paragraphs adjacent to
+    // the field are useful as context; the whole page would flood the prompt.
+    const collect = (startNode, previous, max) => {
+      const out = [];
+      let node = startNode;
+      let count = 0;
+      while (node && count < max) {
+        node = previous ? node.previousElementSibling : node.nextElementSibling;
+        if (!node) break;
+        const txt = normalizeCtxText(node.innerText || node.textContent || '');
+        if (txt) {
+          out.push(txt);
+          count++;
+        }
+      }
+      return previous ? out.reverse() : out;
+    };
+
+    let siblings = [];
+    try {
+      if (el && el.parentElement) {
+        const before = collect(el, true, 4);
+        const after = collect(el, false, 4);
+        siblings = before.concat(after);
+      }
+    } catch (e) { /* ignore */ }
+
+    let text = siblings.join('\n');
+    if (text.length > limit) text = text.slice(0, limit);
+
+    // Reserve room for title/URL; if the cap is tiny, drop the siblings first.
+    const head = parts.join('\n');
+    if (head.length >= limit) {
+      return head.slice(0, limit);
+    }
+    const room = limit - head.length - 1;
+    const body = text.slice(0, Math.max(0, room));
+    return body ? (head + '\n' + body) : head;
   }
 
   function buildInitialChatMessages(contextText) {
@@ -2237,6 +2582,12 @@
 
     if (contextText && contextText.trim()) {
       systemContent += "\n\n" + t('freePromptContextIntro') + "\n\n---\n" + contextText + "\n---";
+    }
+
+    // Page context is additive and clearly labelled as background information
+    // so the model does not treat the page text as the task itself.
+    if (chatContextEnabled && chatContextText && chatContextText.trim()) {
+      systemContent += "\n\n" + t('contextIntroLabel') + "\n\n---\n" + chatContextText + "\n---";
     }
 
     return [
@@ -2262,6 +2613,26 @@
     // Load the current text from the input element as context
     const contextText = getElementFullText(pendingElement);
 
+    // Page context settings are read async; build the conversation and the
+    // window right away with the last known values, then refresh both once
+    // the stored settings arrive (see refreshChatContext below).
+    chrome.storage.sync.get(
+      { contextEnabled: false, pageContextChars: '600' },
+      (settings) => {
+        chatContextEnabled = settings.contextEnabled === true;
+        chatContextText = chatContextEnabled
+          ? collectPageContext(pendingElement, settings.pageContextChars)
+          : '';
+        const cb = getUiElementById('llm-chat-context-toggle');
+        if (cb) cb.checked = chatContextEnabled;
+        // Rebuild the system message with the (possibly) new context.
+        const ctx = pendingElement ? getElementFullText(pendingElement) : contextText;
+        chatMessages = buildInitialChatMessages(ctx);
+      }
+    );
+
+    chatContextEnabled = false;
+    chatContextText = '';
     chatMessages = buildInitialChatMessages(contextText);
 
     // Create overlay
@@ -2300,6 +2671,36 @@
     const headerTitle = document.createElement('span');
     headerTitle.textContent = t('chatTitle');
     header.appendChild(headerTitle);
+
+    // Page-context toggle (per session). Sits in the header so it is visible
+    // without scrolling; the checked state is synced from storage async.
+    const contextWrap = document.createElement('label');
+    contextWrap.id = 'llm-chat-context-wrap';
+    Object.assign(contextWrap.style, {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '6px',
+      fontSize: '11px',
+      fontWeight: '400',
+      cursor: 'pointer',
+      opacity: '0.9',
+      marginLeft: 'auto',
+      marginRight: '10px',
+      whiteSpace: 'nowrap'
+    });
+    const contextToggle = document.createElement('input');
+    contextToggle.type = 'checkbox';
+    contextToggle.id = 'llm-chat-context-toggle';
+    contextToggle.checked = chatContextEnabled;
+    Object.assign(contextToggle.style, { cursor: 'pointer', margin: '0' });
+    contextToggle.addEventListener('change', () => {
+      setChatContextEnabled(contextToggle.checked);
+    });
+    const contextLabel = document.createElement('span');
+    contextLabel.textContent = t('chatContextToggle');
+    contextWrap.appendChild(contextToggle);
+    contextWrap.appendChild(contextLabel);
+    header.appendChild(contextWrap);
 
     const closeBtn = document.createElement('span');
     closeBtn.textContent = '✕';
@@ -2455,6 +2856,7 @@
     // Assemble
     chatWindow.appendChild(header);
     chatWindow.appendChild(messagesArea);
+    chatWindow.appendChild(createChatPresets(inputField));
     chatWindow.appendChild(inputArea);
     chatWindow.appendChild(footer);
 
@@ -2462,6 +2864,78 @@
 
     // Focus input
     setTimeout(() => inputField.focus(), 100);
+  }
+
+  // Toggle page context for the running chat session and rebuild the system
+  // message so the next request carries (or drops) the page surroundings.
+  function setChatContextEnabled(enabled) {
+    chatContextEnabled = enabled === true;
+    if (chatContextEnabled) {
+      chrome.storage.sync.get({ pageContextChars: '600' }, (settings) => {
+        chatContextText = collectPageContext(pendingElement || activeInputElement,
+          settings.pageContextChars);
+        const ctx = pendingElement ? getElementFullText(pendingElement) : '';
+        chatMessages = buildInitialChatMessages(ctx);
+      });
+    } else {
+      chatContextText = '';
+      const ctx = pendingElement ? getElementFullText(pendingElement) : '';
+      chatMessages = buildInitialChatMessages(ctx);
+    }
+    const cb = getUiElementById('llm-chat-context-toggle');
+    if (cb) cb.checked = chatContextEnabled;
+  }
+
+  // Preset prompt chips: one click drops a ready-made instruction into the
+  // input field (never auto-sends — the user stays in control).
+  const CHAT_PRESETS = [
+    { key: 'chatPresetShorter', prompt: 'Mach den Text kürzer, ohne Inhalt zu verlieren.' },
+    { key: 'chatPresetFormal', prompt: 'Schreibe den Text formeller und höflicher.' },
+    { key: 'chatPresetEmail', prompt: 'Formuliere den Text als vollständige E-Mail mit Anrede und Grußformel.' },
+    { key: 'chatPresetBullets', prompt: 'Fasse den Text als Bullet-Liste zusammen.' }
+  ];
+
+  function createChatPresets(inputField) {
+    const wrap = document.createElement('div');
+    wrap.id = 'llm-chat-presets';
+    Object.assign(wrap.style, {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: '6px',
+      padding: '8px 12px 0',
+      backgroundColor: '#fff',
+      borderTop: '1px solid #e0e0e0'
+    });
+
+    for (const preset of CHAT_PRESETS) {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.textContent = t(preset.key);
+      Object.assign(chip.style, {
+        padding: '4px 10px',
+        backgroundColor: '#eef2f7',
+        color: '#2563a8',
+        border: '1px solid #d0d7de',
+        borderRadius: '12px',
+        cursor: 'pointer',
+        fontSize: '12px',
+        fontFamily: 'system-ui, -apple-system, sans-serif',
+        transition: 'background-color 0.15s'
+      });
+      chip.addEventListener('mouseenter', () => { chip.style.backgroundColor = '#e2e8f0'; });
+      chip.addEventListener('mouseleave', () => { chip.style.backgroundColor = '#eef2f7'; });
+      chip.addEventListener('mousedown', (e) => { e.preventDefault(); });
+      chip.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        // Drop the instruction into the input; the user reviews and sends.
+        inputField.value = preset.prompt;
+        inputField.focus();
+      });
+      wrap.appendChild(chip);
+    }
+
+    return wrap;
   }
 
   function resetChatSession(messagesArea) {
@@ -2682,19 +3156,30 @@
     const originalText = getElementFullText(targetElement);
     captureUndoState(targetElement, originalText, null, null, true);
 
-    replaceFullTextInElement(targetElement, resultText);
-    showUndoToast();
+    const doApply = () => {
+      replaceFullTextInElement(targetElement, resultText);
+      showUndoToast();
 
-    // Re-show floating icon
-    activeInputElement = targetElement;
-    lastProcessedElement = null;
-    pendingElement = null;
+      // Re-show floating icon
+      activeInputElement = targetElement;
+      lastProcessedElement = null;
+      pendingElement = null;
 
-    // Close chat window
-    closeChatWindow();
+      // Close chat window
+      closeChatWindow();
 
-    // Show icon again
-    showFloatingIcon();
+      // Show icon again
+      showFloatingIcon();
+    };
+
+    if (confirmBeforeReplace) {
+      showDiffConfirm(originalText, resultText, doApply, () => {
+        lastUndoState = null;
+      });
+      return;
+    }
+
+    doApply();
   }
 
   function closeChatWindow() {

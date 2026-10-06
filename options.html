@@ -160,6 +160,22 @@
       font-size: 0.82rem;
     }
 
+    /* Compact secondary button (e.g. "load models" under the model field) */
+    button.small-secondary {
+      margin-top: 8px;
+      padding: 5px 12px;
+      font-size: 0.82rem;
+      background: #eef2f7;
+      color: var(--text);
+      border: 1px solid var(--border);
+      box-shadow: none;
+    }
+
+    button.small-secondary:hover {
+      background: #e2e8f0;
+      color: var(--text);
+    }
+
     #status {
       font-size: 0.9rem;
       font-weight: 500;
@@ -368,8 +384,10 @@
         </div>
         <div class="field">
           <label for="model" data-i18n="optionsModel">Modell</label>
-          <input type="text" id="model" placeholder="gpt-3.5-turbo">
+          <input type="text" id="model" list="modelList" placeholder="gpt-3.5-turbo">
+          <datalist id="modelList"></datalist>
           <div class="hint" data-i18n="optionsModelHint">z. B. gpt-4, llama2, mistral</div>
+          <button id="fetchModelsBtn" type="button" class="small-secondary" data-i18n="optionsFetchModels">🔄 Modelle laden</button>
         </div>
       </div>
 
@@ -467,6 +485,37 @@
       </div>
       <p style="margin:8px 0 0;font-size:0.82rem;color:var(--label);" data-i18n="optionsFreePromptDesc">
         Aktiviert den Eintrag "💬 Freier Prompt" im Menü. Es öffnet sich ein Chat-Fenster, in dem du per Nachrichteneingabe einen Text prompten kannst. Mit "Übernehmen" wird das Ergebnis in das Textfeld eingesetzt.
+      </p>
+
+      <div class="toggle-row" style="margin-top:16px;">
+        <span class="toggle-label" data-i18n="optionsContextToggle">Seitenkontext an den Chat übergeben</span>
+        <label class="toggle-switch">
+          <input type="checkbox" id="contextEnabled">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <p style="margin:8px 0 0;font-size:0.82rem;color:var(--label);" data-i18n="optionsContextDesc">
+        Gibt dem freien Prompt zusätzlich Seitentitel, URL und die umliegenden Absätze mit. Der Schalter im Chat-Fenster lässt sich pro Sitzung umlegen.
+      </p>
+      <div class="field" style="margin-top:12px;">
+        <label for="pageContextChars" data-i18n="optionsPageContextChars">Max. Zeichen Seitenkontext</label>
+        <input type="number" id="pageContextChars" min="0" max="8000" step="100" placeholder="600">
+        <div class="hint" data-i18n="optionsPageContextCharsHint">0 = kein Kontext. Höhere Werte geben dem Modell mehr Umgebung, kosten aber Kontextfenster.</div>
+      </div>
+    </div>
+
+    <!-- Safety Card -->
+    <div class="card">
+      <h2 data-i18n="optionsSafety">🛡️ Sicherheit</h2>
+      <div class="toggle-row">
+        <span class="toggle-label" data-i18n="optionsConfirmToggle">Ergebnis vor dem Ersetzen bestätigen</span>
+        <label class="toggle-switch">
+          <input type="checkbox" id="confirmBeforeReplace">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <p style="margin:8px 0 0;font-size:0.82rem;color:var(--label);" data-i18n="optionsConfirmDesc">
+        Zeigt nach jeder Aktion einen Vergleich (alt → neu) und ersetzt den Text erst nach Klick auf "Übernehmen". Standardmäßig aus: das Ergebnis wird direkt eingesetzt und kann über den Undo-Toast zurückgenommen werden.
       </p>
     </div>
 

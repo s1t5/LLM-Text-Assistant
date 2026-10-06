@@ -147,7 +147,11 @@
       customActions: [],
       freePromptEnabled: true,
       builtinShortcuts: {},
-      freePromptShortcut: ""
+      freePromptShortcut: "",
+      contextEnabled: false,
+      pageContextChars: "600",
+      confirmBeforeReplace: false,
+      modelsList: []
     };
   }
 
@@ -165,8 +169,15 @@
     "customActions",
     "freePromptEnabled",
     "builtinShortcuts",
-    "freePromptShortcut"
+    "freePromptShortcut",
+    "contextEnabled",
+    "pageContextChars",
+    "confirmBeforeReplace"
   ];
+
+  // Cached model list from the endpoint (GET /v1/models). Not part of
+  // BUILTIN_FIELDS: it is fetched, never read from a form field.
+  let modelsList = [];
 
   // --- State ---
 
@@ -321,6 +332,11 @@
 
     $("saveBtn").addEventListener("click", saveOptions);
     $("resetBtn").addEventListener("click", resetOptions);
+    const fetchModelsBtn = $("fetchModelsBtn");
+    if (fetchModelsBtn) fetchModelsBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      fetchModels();
+    });
     $("addActionBtn").addEventListener("click", (e) => {
       e.preventDefault();
       addNewAction();
@@ -344,6 +360,16 @@
         if (key === 'customActions') continue; // handled separately
         if (key === 'freePromptEnabled') {
           const cb = $('freePromptEnabled');
+          if (cb) cb.checked = result[key] !== undefined ? result[key] : DEFAULTS[key];
+          continue;
+        }
+        if (key === 'contextEnabled') {
+          const cb = $('contextEnabled');
+          if (cb) cb.checked = result[key] !== undefined ? result[key] : DEFAULTS[key];
+          continue;
+        }
+        if (key === 'confirmBeforeReplace') {
+          const cb = $('confirmBeforeReplace');
           if (cb) cb.checked = result[key] !== undefined ? result[key] : DEFAULTS[key];
           continue;
         }
@@ -377,7 +403,58 @@
         ? JSON.parse(JSON.stringify(result.customActions))
         : [];
       renderCustomActions();
+
+      // Cached model list (fetched once, refreshed via the button)
+      chrome.storage.sync.get(['modelsList'], (modelsResult) => {
+        modelsList = Array.isArray(modelsResult.modelsList) ? modelsResult.modelsList : [];
+        applyModelsList();
+      });
     });
+  }
+
+  // Fill the model input's datalist with the last fetched model list.
+  function applyModelsList() {
+    const list = $('modelList');
+    if (!list) return;
+    list.textContent = '';
+    for (const id of modelsList) {
+      const opt = document.createElement('option');
+      opt.value = id;
+      list.appendChild(opt);
+    }
+  }
+
+  // Query the configured endpoint for its model list (GET /v1/models).
+  // CORS is the common failure mode for local endpoints — the error text
+  // says so explicitly instead of leaving the user with a bare network error.
+  function fetchModels() {
+    const apiUrl = $('apiUrl') ? $('apiUrl').value.trim() : '';
+    const apiKey = $('apiKey') ? $('apiKey').value : '';
+
+    if (!apiUrl) {
+      showStatus(t('optionsModelsNeedUrl'), 'error');
+      return;
+    }
+
+    showStatus(t('optionsModelsLoading'), 'success');
+    chrome.runtime.sendMessage(
+      { action: 'listModels', apiUrl: apiUrl, apiKey: apiKey },
+      (response) => {
+        if (chrome.runtime.lastError) {
+          showStatus(t('optionsModelsError') + chrome.runtime.lastError.message, 'error');
+          return;
+        }
+        if (!response || !response.success) {
+          const err = (response && response.error) ? response.error : t('optionsModelsError');
+          showStatus(err, 'error');
+          return;
+        }
+        modelsList = Array.isArray(response.models) ? response.models : [];
+        applyModelsList();
+        chrome.storage.sync.set({ modelsList: modelsList });
+        showStatus(t('optionsModelsLoaded', String(modelsList.length)), 'success');
+      }
+    );
   }
 
   // --- Save ---
@@ -394,6 +471,16 @@
       }
       if (key === 'freePromptEnabled') {
         const cb = $('freePromptEnabled');
+        values[key] = cb ? cb.checked : DEFAULTS[key];
+        continue;
+      }
+      if (key === 'contextEnabled') {
+        const cb = $('contextEnabled');
+        values[key] = cb ? cb.checked : DEFAULTS[key];
+        continue;
+      }
+      if (key === 'confirmBeforeReplace') {
+        const cb = $('confirmBeforeReplace');
         values[key] = cb ? cb.checked : DEFAULTS[key];
         continue;
       }
