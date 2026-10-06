@@ -128,34 +128,50 @@ function storageSet(values) {
 }
 
 // --- Compose script injection entrypoint ---
-// Registers content.js so it runs inside every Thunderbird compose window.
-// In Manifest V3 (TB 128+) the old browser.composeScripts.register() was
-// replaced by browser.scripting.compose.registerScripts(). We also inject
-// into already-open compose tabs, because registerScripts only affects
-// windows opened *after* registration.
+// Registers shortcuts.js + content.js so they run inside every Thunderbird
+// compose window. shortcuts.js is the shortcut guard: it must be the FIRST
+// listener on `window` in the capture phase, so it gets its own registration
+// at runAt document_start (content.js keeps the default document_idle, it
+// needs the DOM). In Manifest V3 (TB 128+) the old
+// browser.composeScripts.register() was replaced by
+// browser.scripting.compose.registerScripts(). We also inject into
+// already-open compose tabs, because registerScripts only affects windows
+// opened *after* registration.
 async function registerComposeScript() {
-  try {
-    await browser.scripting.compose.registerScripts([{
-      id: "llm-compose-script",
-      js: ["/content.js"]
-    }]);
+  const guardScript = {
+    id: "llm-compose-shortcut-guard",
+    js: ["/shortcuts.js"],
+    runAt: "document_start"
+  };
+  const mainScript = { id: "llm-compose-script", js: ["/content.js"] };
 
-    // Inject into compose tabs that are already open (registerScripts only
-    // affects newly opened windows).
-    try {
-      const composeTabs = await browser.tabs.query({ type: "messageCompose" });
-      for (const tab of composeTabs) {
-        browser.scripting.executeScript({
-          target: { tabId: tab.id },
-          files: ["/content.js"]
-        }).catch((e) => console.warn("[LLM] executeScript on existing tab:", e));
-      }
-    } catch (e) {
-      console.warn("[LLM] Could not inject into existing compose tabs:", e);
-    }
+  try {
+    await browser.scripting.compose.registerScripts([guardScript, mainScript]);
   } catch (err) {
-    // Registration fails if it was already done (e.g. onStartup after install).
-    console.warn("[LLM] scripting.compose.registerScripts (non-fatal):", err);
+    // registerScripts is all-or-nothing, so a rejected guard registration
+    // would cost us compose support entirely (and a re-run after onStartup
+    // fails because the ids already exist). Retry with content.js alone —
+    // its own window-capture listener keeps shortcuts working.
+    console.warn("[LLM] Compose guard registration failed, retrying without it:", err);
+    try {
+      await browser.scripting.compose.registerScripts([mainScript]);
+    } catch (err2) {
+      console.warn("[LLM] scripting.compose.registerScripts (non-fatal):", err2);
+    }
+  }
+
+  // Inject into compose tabs that are already open (registerScripts only
+  // affects newly opened windows).
+  try {
+    const composeTabs = await browser.tabs.query({ type: "messageCompose" });
+    for (const tab of composeTabs) {
+      browser.scripting.executeScript({
+        target: { tabId: tab.id },
+        files: ["/shortcuts.js", "/content.js"]
+      }).catch((e) => console.warn("[LLM] executeScript on existing tab:", e));
+    }
+  } catch (e) {
+    console.warn("[LLM] Could not inject into existing compose tabs:", e);
   }
 }
 registerComposeScript();

@@ -230,17 +230,24 @@
     return null;
   }
 
+  // Returns the matched shortcut string when this keydown triggered an action,
+  // null otherwise. That return value is the contract with the document_start
+  // guard in shortcuts.js: a truthy result makes the guard swallow the event
+  // before any page handler sees it (see installShortcutGuardHook).
   function handleShortcutKeydown(e) {
     const el = resolveEditingTarget();
-    if (!el) return;
+    if (!el) return null;
 
     const shortcutStr = serializeKeyboardEvent(e);
-    if (!shortcutStr) return;
+    if (!shortcutStr) return null;
 
     const actionId = findActionForShortcut(shortcutStr);
-    if (!actionId) return;
+    if (!actionId) return null;
 
     e.preventDefault();
+    // stopImmediatePropagation (not just stopPropagation) is what also
+    // silences page listeners registered on the SAME node before ours.
+    e.stopImmediatePropagation();
     e.stopPropagation();
 
     // Set the active element so executeAction / openFreePromptChat works correctly
@@ -253,6 +260,21 @@
       openFreePromptChat();
     } else {
       executeAction(actionId);
+    }
+
+    return shortcutStr;
+  }
+
+  // Hand the shortcut decision over to the document_start guard (shortcuts.js).
+  // That script is injected before any page script and therefore owns the
+  // FIRST capture listener on `window`; this file keeps owning the decision
+  // (action config + field resolution). Both run in the same isolated world,
+  // so a plain global is all it takes to connect them.
+  function installShortcutGuardHook() {
+    try {
+      globalThis.__llmShortcutGuard = handleShortcutKeydown;
+    } catch (err) {
+      console.warn("[LLM Content] Could not install shortcut guard hook:", err);
     }
   }
 
@@ -373,8 +395,14 @@
       }
     });
 
-    // Global shortcut listener (capture phase so we win over websites)
-    document.addEventListener('keydown', handleShortcutKeydown, true);
+    // Shortcut listener, capture phase on `window` — the earliest node in the
+    // propagation path reachable from this file. The PRIMARY path is the
+    // document_start guard in shortcuts.js, which registers on `window` before
+    // any page script runs and swallows matched combinations (it delegates the
+    // decision to installShortcutGuardHook below). This listener covers
+    // targets without that guard (Thunderbird compose scripts, stale builds).
+    window.addEventListener('keydown', handleShortcutKeydown, true);
+    installShortcutGuardHook();
   }
 
   function isTextInput(el) {
