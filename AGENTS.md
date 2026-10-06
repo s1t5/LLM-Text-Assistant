@@ -234,6 +234,40 @@ Background-Dateien. Der abgerufene Modell-Katalog liegt unter `modelsList` und i
 
 Test: `test-v16-features.js` (diffWords, modelsUrlFromApiUrl, collectPageContext).
 
+## v1.6.2 — Store-Ablehnung behoben (Extension lud gar nicht)
+
+**Symptom:** Der Chrome Web Store lehnte v1.6.0 und v1.6.1 mit dem generischen Grund
+„Der Artikel funktioniert nicht wie angekündigt" ab (Richtlinie: *Erweiterungen mit
+fehlerhafter Funktionalität*). Lokal war alles grün.
+
+**Ursache:** `_locales/{de,en}/messages.json` → `optionsModelsLoaded` (neu in v1.6.0,
+Model-Listen-Feature) enthielt `"$COUNT$ models found"` **ohne** `placeholders`-Block.
+Chrome bricht beim Parsen der Locale-Datei das **komplette Laden der Extension** ab:
+
+```
+Extension error: Fehler beim Laden der Erweiterung aus: <dir>.
+Variable $COUNT$ used but not defined.
+```
+
+Die Extension erschien damit im Chrome des Prüfers **überhaupt nicht** — daher „funktioniert
+nicht wie angekündigt". Firefox/Thunderbird sind an dieser Stelle toleranter, weshalb der
+Fehler beim Entwickeln auf Gecko nicht auffiel.
+
+**Fix:** `placeholders: { "count": { "content": "$1" } }` in beiden Locale-Dateien
+(der Aufruf `t('optionsModelsLoaded', String(n))` blieb unverändert).
+
+**Neue Absicherungen:**
+
+- `node tools/build.mjs` bricht jetzt ab, wenn ein `$NAME$` in einer Message keinen
+  `placeholders`-Eintrag hat (`$$` = literales Dollarzeichen, wird nicht geprüft).
+- `node test-locale-placeholders.js` prüft dasselbe standalone (läuft im CI-Test-Job mit).
+- `python3 tools/chrome-load-check.py` lädt `build/chrome` in ein echtes Chrome (Xvfb)
+  und meldet Ladefehler aus dem Chrome-Log — der einzige Check, der diese Fehlerklasse
+  wirklich sieht.
+
+**Regel:** Jeder `$NAME$`-Token braucht einen `placeholders`-Eintrag in **beiden** Sprachen.
+Nach jeder Locale-Änderung `node tools/build.mjs --no-zip && python3 tools/chrome-load-check.py`.
+
 ## Mehrsprachigkeit (i18n)
 
 Die Extension ist vollständig internationalisiert (aktuell Deutsch + Englisch).
@@ -250,13 +284,25 @@ Die Extension ist vollständig internationalisiert (aktuell Deutsch + Englisch).
 2. In JavaScript wird der Text über `chrome.i18n.getMessage(key, subst?)` geladen (Helper: `t(key)` in `content.js`/`options.js`/`background.js`).
 3. In HTML werden statische Texte über `data-i18n="key"` gesetzt (`options.js` wendet sie via `applyI18n()` an).
 4. **Platzhalter** werden in `messages.json` als `$NAME$` geschrieben und brauchen einen `placeholders`-Eintrag. Aufruf: `t('key', 'Wert')`.
+   **Kritisch:** Ein `$NAME$` in `message` OHNE passenden `placeholders`-Eintrag lässt Chrome die **gesamte Extension nicht laden** („Variable $COUNT$ used but not defined") — das ist der Grund für die Store-Ablehnungen von v1.6.0/v1.6.1 (Fix in v1.6.2). Ein literales Dollarzeichen muss als `$$` geschrieben werden.
 5. **Default-System-Prompts** sind ebenfalls locale-abhängig (`defaultPromptTranslate`, `defaultPromptExpand`, …) und werden zur Laufzeit aus den Messages gebaut — nicht hartcodiert ändern, sondern in beiden Locale-Dateien.
 6. **Neue Sprache hinzufügen**: neuen Ordner `_locales/<code>/` mit vollständiger `messages.json` anlegen. Die Keys müssen exakt zu `de` und `en` passen (gleiche Menge, gleiche Platzhalter).
 
 ### Konsistenz-Check
 
-Die Locale-Key-Parität wird **vom Build geprüft** (`node tools/build.mjs` bricht bei
-Abweichung ab). Manuell:
+Die Locale-Key-Parität **und** die Platzhalter-Definitionen werden **vom Build geprüft**
+(`node tools/build.mjs` bricht bei Abweichung ab). Zusätzlich prüft
+`node test-locale-placeholders.js` alle `$NAME$`-Tokens gegen die `placeholders`-Blöcke.
+
+**Lade-Test in echtem Chrome** (findet Fehler, die kein Node-Test sieht — die Extension
+lädt dann gar nicht):
+
+```bash
+node tools/build.mjs --no-zip
+python3 tools/chrome-load-check.py          # lädt build/chrome, meldet Ladefehler
+```
+
+Manuell (Key-Parität):
 
 ```bash
 python3 -c "
