@@ -67,6 +67,11 @@ jobs:
           fi
           echo "All test suites passed."
 
+      - name: Store install check (fresh-install boot + seeded defaults)
+        run: |
+          node tools/build.mjs --no-zip
+          node tools/store-boot-check.js
+
       - name: Build validation (all targets, no packaging)
         run: |
           node tools/build.mjs --no-zip

@@ -13,7 +13,9 @@
 const fs = require('fs');
 const path = require('path');
 
-const dir = process.argv[2] || '/home/hermes/workspace/LLM-Text-Assistant';
+// Default to the directory this script lives in — never an absolute path, so
+// the check also works in CI, where the checkout lives somewhere else.
+const dir = process.argv[2] || __dirname;
 const read = (f) => fs.readFileSync(path.join(dir, f), 'utf8');
 
 function objectKeys(src, fnName) {

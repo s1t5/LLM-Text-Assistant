@@ -9,10 +9,22 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 
-const dir = process.argv[2] || '/tmp/storecheck/ext';
+// Default to the built Chrome tree in this checkout — relative to the script,
+// never an absolute path, so the check also works in CI.
+const dir = process.argv[2] || path.join(__dirname, '..', 'build', 'chrome');
 const read = (f) => fs.readFileSync(path.join(dir, f), 'utf8');
 
 const problems = [];
+
+// A missing target tree is a hard error, not a test failure: without this the
+// checks below would read nothing and report misleading "undefined seeded"
+// failures instead of pointing at the real problem (no build ran).
+if (!fs.existsSync(path.join(dir, 'background.js'))) {
+  console.error('FEHLER: kein Extension-Baum in ' + dir);
+  console.error('Erst bauen: node tools/build.mjs --no-zip');
+  process.exit(2);
+}
+
 function check(name, fn) {
   try { const r = fn(); console.log('  PASS  ' + name); return r; }
   catch (e) { problems.push(name + ': ' + e.message); console.log('  FAIL  ' + name + ' — ' + e.message); }
