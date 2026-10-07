@@ -109,13 +109,19 @@ Open the extension options (puzzle icon in the toolbar → **LLM Text Assistant*
 
 **Preset chips in the chat**: Four ready-made instructions (Shorter, More formal, As email, Bullet list) sit above the chat input. A click drops the instruction into the input field for review — it is never sent automatically.
 
-**Review before replacing** (optional, off by default): With `Confirm result before replacing` enabled, every finished result is shown as a word-level old→new diff (removals struck through in red, additions in green) and is only written into the field after you click **Apply**. **Discard** leaves the field untouched — for a selection action it also removes the partial result the live streaming had already written. This works for selection actions, whole-field actions and the chat's "Apply".
+**Review before replacing** (optional, off by default): With `Confirm result before replacing` enabled, every finished result is shown as a word-level old→new diff (removals struck through in red, additions in green) and is only written into the field after you click **Apply**. **Discard** leaves the field exactly as it was — the field is not touched at all while the result is still being generated (since v1.6.4). This works for selection actions, whole-field actions and the chat's "Apply".
 
 **Model list from the endpoint**: The options page has a **Load models** button next to the model field. It derives `GET <base>/models` from the configured chat-completions URL (`…/v1/chat/completions` → `…/v1/models`) and fills the model input's autocomplete. Works with OpenAI, Ollama, LM Studio and llama.cpp. The request runs in the background (not subject to a page's CSP), but the endpoint still needs to allow the extension origin — a `CORS/DNS` error in the status line almost always means the local server needs `--allow-origins`/`OLLAMA_ORIGINS`.
 
 ## 🆕 v1.6.2 — fix: extension failed to load in Chrome
 
 A locale placeholder was declared in the message text but not in the `placeholders` block (`optionsModelsLoaded`). Chrome aborts the **entire extension load** when it finds an undeclared `$TOKEN$`, so the extension did not appear at all in Chrome after installing from the store — the reason the Chrome Web Store rejected v1.6.0 and v1.6.1 as "does not work as described". Fixed by declaring the placeholder in both locales. The build now rejects undeclared placeholders, `test-locale-placeholders.js` covers it in CI, and `tools/chrome-load-check.py` loads the built package into a real Chrome to catch this class of error before submitting.
+
+## 🆕 v1.6.4 — fix: confirm-before-replacing wrote the result anyway
+
+With `Confirm result before replacing` enabled, the field was still overwritten while the result streamed in — so the text stood there already before you clicked **Apply**, and **Discard** had to write the original back (clobbering anything you typed while waiting). The gate was only attached to the finish callbacks, not to the streaming write paths: whole-field actions streamed into every non-framework field (textareas, inputs, plain contenteditables) and selection actions wrote each chunk unconditionally.
+
+Now the decision is frozen when a run starts and checked at the write boundary: whole-field runs buffer everything and write once after confirmation, selection runs drop all non-final chunks, and the background-fallback message paths (`replaceFullText`/`replaceSelectedText`) are gated as well. **Discard** no longer writes anything back — nothing was written.
 
 ## 🔒 Privacy & Security Notes
 

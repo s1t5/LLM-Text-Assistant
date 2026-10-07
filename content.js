@@ -1571,6 +1571,13 @@
     let accumulated = "";
     let cleaned = false;
 
+    // "Ergebnis vor dem Ersetzen bestätigen": während des Streamings darf
+    // NICHTS ins Feld geschrieben werden — sonst steht das Ergebnis schon vor
+    // dem Klick auf "Übernehmen" drin und "Abbrechen" müsste zurückschreiben.
+    // Die Entscheidung wird beim Start fixiert, damit ein Umschalten der
+    // Option mitten im Stream nicht zu einem halb geschriebenen Feld führt.
+    const deferWrite = confirmBeforeReplace;
+
     // Framework-managed contenteditables (incl. Thunderbird's compose body,
     // see isFrameworkManagedCE) get ONE write at completion instead of a
     // full-field rewrite per token. Each per-token snapshot runs select-all +
@@ -1581,7 +1588,7 @@
     // shrinking snapshots of the same text, newest first, final text last).
     // Plain CE fields keep the live per-token streaming (cheap innerText
     // writes there, no editor state to desync).
-    const bufferStream = el.isContentEditable && isFrameworkManagedCE(el);
+    const bufferStream = deferWrite || (el.isContentEditable && isFrameworkManagedCE(el));
 
     const finish = (finalText) => {
       hideProcessingIndicator();
@@ -1593,7 +1600,7 @@
         lastProcessedElement = null;
         showFloatingIcon();
       };
-      if (confirmBeforeReplace) {
+      if (deferWrite) {
         // Preview first; the field is only touched after confirmation.
         showDiffConfirm(text, finalText, applyResult, () => {
           // Discarded: nothing was written, so drop the captured undo state.
@@ -1625,15 +1632,19 @@
       onError: (err) => {
         hideProcessingIndicator();
         currentRequestId = null;
-        // Restore original text on error
-        replaceFullTextInElement(el, text);
+        // Restore original text on error — but only if streaming actually
+        // touched the field (with "confirm before replace" it never did).
+        if (!deferWrite) replaceFullTextInElement(el, text);
         lastUndoState = null;
         showErrorNotification(err.message);
       },
       onAborted: () => {
         hideProcessingIndicator();
         currentRequestId = null;
-        if (accumulated.trim().length > 0) {
+        if (deferWrite) {
+          // Nothing reached the field — leave it exactly as it was.
+          lastUndoState = null;
+        } else if (accumulated.trim().length > 0) {
           replaceFullTextInElement(el, accumulated);
           showUndoToast();
         } else {
@@ -1736,7 +1747,13 @@
     const isFrozen = sel.mode === 'ce-frozen';
     const frameworkCE = el.isContentEditable && isFrameworkManagedCE(el);
 
+    // "Ergebnis vor dem Ersetzen bestätigen": wie in startFullTextReplacement
+    // wird während des Streamings nicht ins Feld geschrieben. Nur der finale
+    // Write (nach Klick auf "Übernehmen") passiert das Gate.
+    const deferWrite = confirmBeforeReplace;
+
     const applyChunk = (newText, isFinal) => {
+      if (deferWrite && !isFinal) return;
       if (frameworkCE) {
         // Framework editors revert direct DOM writes, so all writes go through
         // model-aware paths. Buffer everything and write once at the end:
@@ -1801,9 +1818,9 @@
       // eats characters after the selection when the result is shorter.
       //
       // With "confirm before replacing" on, the finished result is previewed
-      // instead: nothing is written until the user clicks Übernehmen, and a
-      // discard removes the already-streamed partial result again.
-      if (confirmBeforeReplace) {
+      // instead: nothing was written during streaming (see deferWrite above),
+      // so "Übernehmen" performs the first and only write into the field.
+      if (deferWrite) {
         showDiffConfirm(rawText, finalChunk, () => {
           applyChunk(finalChunk, true);
           finalizeCEState(el);
@@ -1813,11 +1830,10 @@
           lastProcessedElement = null;
           showFloatingIcon();
         }, () => {
-          // Discard: restore the original content the streaming wrote over.
+          // Discard: nothing was written, so the field stays untouched. A
+          // restore here would clobber text the user typed while waiting.
           const state = cleanedSelection.get(el);
           if (state) state.completed = true;
-          replaceFullTextInElement(el, originalFullText || '');
-          finalizeCEState(el);
           cleanedSelection.delete(el);
           lastUndoState = null;
           activeInputElement = el;
@@ -3416,20 +3432,50 @@
       return;
     }
 
-    let el = targetElement;
-    // Capture undo state for the non-streaming legacy path
+    const el = targetElement;
     const originalText = getElementFullText(el);
-    captureUndoState(el, originalText, null, null, true);
-    replaceFullTextInElement(el, newText);
-    showUndoToast();
 
-    // Re-show icon after replacement
-    activeInputElement = el;
-    lastProcessedElement = null;
-    showFloatingIcon();
+    const doApply = () => {
+      // Capture undo state for the non-streaming legacy path
+      captureUndoState(el, originalText, null, null, true);
+      replaceFullTextInElement(el, newText);
+      showUndoToast();
+
+      // Re-show icon after replacement
+      activeInputElement = el;
+      lastProcessedElement = null;
+      showFloatingIcon();
+    };
+
+    // Legacy message path (background fallback, no streaming port): honor
+    // "confirm before replace" too — same contract as the streaming paths.
+    if (confirmBeforeReplace) {
+      showDiffConfirm(originalText, newText, doApply, () => { lastUndoState = null; });
+      return;
+    }
+
+    doApply();
   }
 
+  // Legacy message path. With "confirm before replace" on, the diff preview
+  // gates the actual splice (the streaming paths buffer instead — see
+  // startSelectionReplacement); otherwise the immediate write runs unchanged.
   function replaceSelectedText(newText) {
+    if (confirmBeforeReplace) {
+      const el = resolveEditingTarget();
+      if (el) {
+        const sel = getElementSelection(el);
+        const oldText = (sel && sel.text) ? sel.text : getElementFullText(el);
+        showDiffConfirm(oldText, newText,
+          () => replaceSelectedTextImmediate(newText),
+          () => { lastUndoState = null; });
+        return;
+      }
+    }
+    replaceSelectedTextImmediate(newText);
+  }
+
+  function replaceSelectedTextImmediate(newText) {
     const activeElement = resolveEditingTarget();
 
     if (!activeElement) {
