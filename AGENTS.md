@@ -45,6 +45,7 @@ node test-free-prompt-route.js # contextMenuProcess-Routing + Focus-Erkennung
 node test-frame-routing.js     # all_frames + frame-sensitiver Message-Routing
 node test-v16-features.js      # diffWords, modelsUrlFromApiUrl, collectPageContext
 node test-shortcut-priority.js # document_start-Guard: Shortcut-Priorität, Swallow-Logik, Hook-Vertrag
+node test-confirm-before-replace.js # Confirm-Gate in allen Schreibpfaden (kein Vorab-Schreiben)
 ```
 
 Die Tests slicen die Funktionen per String-Slicing aus den ausgelieferten Quellen und
@@ -210,14 +211,29 @@ Background-Dateien. Der abgerufene Modell-Katalog liegt unter `modelsList` und i
 - `showDiffConfirm(old, neu, onApply, onDiscard)` zeigt das Overlay; `closeDiffOverlay(keepPending)`
   räumt auf. `pendingConfirm` hält die Callbacks.
 - **Angeklemmt an alle drei Finish-Pfade:** `startFullTextReplacement.finish`,
-  `startSelectionReplacement.finish` (Discard stellt `originalFullText` wieder her —
-  das Live-Streaming hat das Feld vorher schon überschrieben) und `applyLastResult`
-  (Chat-Übernahme).
+  `startSelectionReplacement.finish` und `applyLastResult` (Chat-Übernahme).
+  Zusätzlich in den beiden Legacy-Message-Pfaden (`replaceFullText`,
+  `replaceSelectedText` — Background-Fallback ohne Streaming-Port), die den
+  Diff ebenfalls erst nach Bestätigung schreiben.
+- **Während des Streamings wird nichts geschrieben** (Fix v1.6.4): beide
+  Streaming-Pfade fixieren die Entscheidung beim Start als `const deferWrite =
+  confirmBeforeReplace;`. Ganzfeld buffert dann (`bufferStream = deferWrite ||
+  frameworkCE`), die Selektion verwirft Non-Final-Chunks
+  (`applyChunk`: `if (deferWrite && !isFinal) return;`). Erst „Übernehmen"
+  schreibt. Vorher schrieb das Live-Streaming das Ergebnis Token für Token ins
+  Feld, sodass es schon vor der Bestätigung dastand.
 - `confirmBeforeReplace` wird in `init()` in eine Content-Script-Variable gespiegelt
   (storage get + `onChanged`), damit die Stream-Finish-Hot-Paths ohne async-Read
-  verzweigen können. **Weitere Confirm-Gates genauso spiegeln.**
+  verzweigen können. **Weitere Confirm-Gates genauso spiegeln.** Die Entscheidung
+  pro Lauf wird trotzdem beim Start eingefroren (`deferWrite`), damit ein
+  Umschalten mitten im Stream kein halb geschriebenes Feld erzeugt.
 - Die Vorschau berührt die Ersetzungs-Pipeline **nicht** — sie verzögert nur den
   bestehenden `finish`-Callback.
+
+Test: `test-confirm-before-replace.js` (Gate in allen Schreibpfaden, Discard
+schreibt nicht zurück, Legacy-Pfade gegated) + E2E
+`~/workspace/llm-e2e/run-confirm-before-replace.sh` (echtes `content.js` in
+headless Chromium, prüft Feldzustand vor/nach Übernehmen bzw. Abbrechen).
 
 ### Model-Liste vom Endpunkt
 
@@ -319,6 +335,50 @@ Echte-Browser-E2E (Chromium headless, Szenario A/B):
 `~/workspace/llm-e2e/shortcut-guard-a.html` (Guard zuerst → Seite sieht den Keydown nicht)
 und `shortcut-guard-b.html` (Seite zuerst → Seite gewinnt; belegt, warum `document_start`
 nötig ist). Lauf: `chrome --headless=new --dump-dom file://…/shortcut-guard-a.html`.
+
+## v1.6.4 — „Ergebnis vor dem Ersetzen bestätigen" schrieb trotzdem vorab
+
+**Symptom:** Mit aktivierter Option *Sicherheit → Ergebnis vor dem Ersetzen
+bestätigen* stand das Ergebnis schon vor dem Klick auf „Übernehmen" im Feld;
+die Diff-Vorschau zeigte den Vergleich also gegen ein bereits überschriebenes
+Feld, und „Abbrechen" musste den Originaltext zurückschreiben (und überschrieb
+dabei Eingaben, die während des Wartens gemacht wurden).
+
+**Ursache:** Das Gate war nur an den `finish`-Pfaden angeklemmt, nicht am
+Streaming. Beide Stream-Pfade schrieben weiter Token für Token ins Feld:
+
+- `startFullTextReplacement.onToken` → `replaceFullTextInElement(el, accumulated)`.
+  `bufferStream` war nur für framework-verwaltete ContentEditables true —
+  Textareas, Inputs und einfache ContentEditables streamten live.
+- `startSelectionReplacement.onToken` → `applyChunk(accumulated, false)`, ohne
+  jede Bedingung.
+
+**Fix:** Die Entscheidung wird beim Start eines Laufs eingefroren
+(`const deferWrite = confirmBeforeReplace;`) und an der Schreibgrenze geprüft:
+
+- Ganzfeld: `bufferStream = deferWrite || (el.isContentEditable && isFrameworkManagedCE(el))`
+  → es wird genau einmal geschrieben, im `applyResult` nach der Bestätigung.
+  `onError`/`onAborted` schreiben nur noch zurück, wenn tatsächlich gestreamt
+  wurde (`if (!deferWrite) …`).
+- Selektion: `applyChunk` verwirft Non-Final-Chunks (`if (deferWrite && !isFinal) return;`);
+  nur der finale Write aus dem „Übernehmen"-Callback passiert das Gate. Der
+  Discard-Pfad schreibt **nicht** mehr `originalFullText` zurück — es wurde
+  nichts geschrieben.
+- Legacy-Message-Pfade (`replaceFullText`, `replaceSelectedText`; Background-
+  Fallback ohne Streaming-Port) hängen jetzt ebenfalls an `showDiffConfirm`;
+  der bisherige Sofort-Schreiber heißt `replaceSelectedTextImmediate`.
+
+Weil `deferWrite` pro Lauf fixiert ist, führt ein Umschalten der Option mitten
+im Stream nicht zu einem halb geschriebenen Feld: der laufende Lauf behält
+seine Policy.
+
+**Tests:** `node test-confirm-before-replace.js` (sliced die Funktionen aus
+`content.js` und prüft das Gate in allen vier Schreibpfaden; schlägt auf dem
+Code vor dem Fix mit 14 Checks fehl) + E2E
+`~/workspace/llm-e2e/run-confirm-before-replace.sh` (lädt das echte `content.js`
+mit gestubbter `chrome.*`-API in headless Chromium und prüft Feldzustand vor
+und nach Übernehmen/Abbrechen für Ganzfeld, Selektion im Textarea, Selektion im
+ContentEditable, Legacy-Pfad, Abbruch und „Option aus").
 
 ## Mehrsprachigkeit (i18n)
 
