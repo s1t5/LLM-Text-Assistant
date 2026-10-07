@@ -123,6 +123,12 @@ With `Confirm result before replacing` enabled, the field was still overwritten 
 
 Now the decision is frozen when a run starts and checked at the write boundary: whole-field runs buffer everything and write once after confirmation, selection runs drop all non-final chunks, and the background-fallback message paths (`replaceFullText`/`replaceSelectedText`) are gated as well. **Discard** no longer writes anything back — nothing was written.
 
+## 🆕 v1.6.5 — fix: page shortcuts swallowed what you typed in the chat
+
+On pages that register their own single-key shortcuts on `document`, the free-prompt input took no characters at all. The page's handler skips keys when `event.target` is a form field — but for a **closed shadow root** the page sees `target` retargeted to the extension's host `<div>`, so the check fails and the handler calls `preventDefault()`, dropping the character. On the MiniKanban board (`n b f a c s w t` and `/`) the board's actions also fired: `n` opened the Add-Card modal and `/` moved the focus into the board search field, so every later character landed there.
+
+Keystrokes typed into the add-in's own UI now stop at the extension's shadow root and never reach the page, while the add-in's own shortcuts (window-capture guard) keep working. Page handlers registered in the *capture* phase on `window`/`document` still run first — they cannot be intercepted from inside, and intercepting them would break the field itself.
+
 ## 🔒 Privacy & Security Notes
 
 - **No data collection**: The extension collects nothing. API calls go directly from your browser to the endpoint you configured, there is no intermediate server

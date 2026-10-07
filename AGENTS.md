@@ -380,6 +380,53 @@ mit gestubbter `chrome.*`-API in headless Chromium und prüft Feldzustand vor
 und nach Übernehmen/Abbrechen für Ganzfeld, Selektion im Textarea, Selektion im
 ContentEditable, Legacy-Pfad, Abbruch und „Option aus").
 
+## v1.6.5 — Tippen im Free-Prompt-Fenster wurde von Seiten-Shortcuts verschluckt
+
+**Symptom:** Auf manchen Seiten ließ sich im Free-Prompt-Fenster nichts
+eingeben — das Eingabefeld nahm keine Zeichen an (gemeldet für das MiniKanban-
+Board, `wwwroot/js/board-shortcuts.js`).
+
+**Ursache:** `board-shortcuts.js` registriert einen `keydown`-Handler auf
+`document` und überspringt ihn nur, wenn `isTyping(e.target)` wahr ist (Tag
+`input`/`textarea`/`select` oder `isContentEditable`). Bei einem **closed shadow
+root** wird `e.target` für die Seite auf das **Host-Element** retargetet
+(`<div id="llm-assistant-ui-host">`) — `isTyping` ist damit `false`, der Handler
+hält die Eingabe für „kein Feld" und ruft `preventDefault()`:
+
+```
+n b f a c s w t /   → preventDefault() → Zeichen kommt nie im Feld an
+```
+
+Zusätzlich feuern die Board-Aktionen selbst: `n` öffnete das Add-Card-Modal,
+`/` rief `focusSearch()` und **riss den Fokus** ins Board-Suchfeld — danach
+landeten alle weiteren Zeichen dort. Genau das ist die beobachtete „man kann
+nichts eingeben"-Erfahrung.
+
+**Fix:** `getUiRoot()` stoppt die Propagation von `keydown`/`keyup`/`keypress`
+auf dem Shadow Root (Bubble-Phase). Der Pfad ist `target → shadowRoot → host →
+… → document`, der Stop liegt also genau zwischen unserem Feld und dem
+`document`-Listener der Seite. Der Capture-Listener des Add-ins auf `window`
+(`shortcuts.js`) läuft **vorher** und bleibt unberührt — die eigenen Kürzel
+funktionieren weiter. Kein `stopImmediatePropagation`, damit weitere Listener
+auf demselben Knoten (eigenes UI) nicht mitbetroffen sind.
+
+**Grenze:** Seiten, die ihren Handler in der **Capture**-Phase auf
+`window`/`document` registrieren, laufen vor dem Shadow Root und können so nicht
+gestoppt werden. In der Capture-Phase auf `window` wäre ein `stopPropagation()`
+sogar fatal — es würde das Event gar nicht erst bis zu unserem Eingabefeld
+durchlassen. Für MiniKanban (und die übliche Bubble-Phase) reicht der Fix.
+
+**Tests:** Gruppe U in `test-shortcut-priority.js` (sliced `getUiRoot` aus
+`content.js`, prüft die Listener und modelliert die Propagationskette mit
+Seiten-Handler auf `document` + Guard auf `window`-Capture; U1/U2 schlagen auf
+dem Code vor dem Fix fehl) + E2E
+`~/workspace/llm-e2e/run-chat-input-typing.py` — lädt das echte
+`board-shortcuts.js` als Seiten-Skript und tippt mit **echten** Tastatur-Events
+über CDP (`Input.dispatchKeyEvent`; synthetische Events lösen die
+Default-Aktion nicht aus). Vor dem Fix: Feld leer, `prevented=true` für alle
+neun Zeichen, Board-Aktion gefeuert, Fokus im Suchfeld. Danach: `nbfacswt/hello`
+kommt vollständig an, die Seite sieht nichts.
+
 ## Mehrsprachigkeit (i18n)
 
 Die Extension ist vollständig internationalisiert (aktuell Deutsch + Englisch).
@@ -451,6 +498,7 @@ Kanonische Form: `[Ctrl+][Alt+][Shift+][Meta+]<Key>`
 - **Priorität (seit v1.6.3):** `shortcuts.js` läuft per `run_at: "document_start"` vor jedem Seiten-Skript und ist damit der **erste** Capture-Listener auf `window`. Trifft eine Add-in-Kombination bei fokussiertem Textfeld, wird sie mit `preventDefault()` + `stopImmediatePropagation()` konsumiert — die Seite sieht das Event gar nicht, auch nicht auf `keyup`. Details: Abschnitt „v1.6.3".
 - `content.js` behält seinen Listener als **Fallback** (jetzt ebenfalls `window`, Capture-Phase) und stellt dem Guard die Entscheidung über `globalThis.__llmShortcutGuard` bereit.
 - Shortcuts werden **nur ausgelöst**, wenn ein Textfeld (`INPUT`, `TEXTAREA`, `contenteditable`) fokussiert ist.
+- **Umgekehrte Richtung (seit v1.6.5):** Tasten, die in unser **eigenes** UI getippt werden, dürfen die Seite nicht erreichen. `getUiRoot()` stoppt `keydown`/`keyup`/`keypress` per `stopPropagation()` auf dem Shadow Root (Bubble). Grund: bei einem closed shadow root sieht die Seite `e.target` als Host-`<div>`, ihre `isTyping(e.target)`-Prüfung schlägt fehl und ihr `preventDefault()` verschluckt das Zeichen (MiniKanban-Board: `n/b/f/a/c/s/w/t` und `/` kamen nie an, `/` riss zusätzlich den Fokus ins Board-Suchfeld). Details: Abschnitt „v1.6.5".
 - Das schwebende Menü zeigt konfigurierte Kürzel rechtsbündig neben dem Aktionsnamen an.
 
 ## Veröffentlichen (alle drei Stores)
