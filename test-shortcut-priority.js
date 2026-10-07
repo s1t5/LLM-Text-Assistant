@@ -267,6 +267,116 @@ check('H5: content.js listens on window (capture), not document, as fallback',
 check('H6: matched shortcuts use stopImmediatePropagation',
   /e\.stopImmediatePropagation\(\);/.test(extractFn('handleShortcutKeydown')));
 
+// --- 3b) the add-in's own UI must not leak keystrokes to the page ----------
+// A page keydown handler on `document` (MiniKanban's board-shortcuts.js is the
+// reference case) checks `isTyping(e.target)`. For a CLOSED shadow root the page
+// sees e.target retargeted to the host <div>, so the check fails, the handler
+// calls preventDefault() and the character is swallowed — and its shortcut
+// actions even steal the focus. content.js therefore stops propagation of
+// key events at the shadow root (bubble phase), which is exactly between the
+// input and the page's document listener.
+function makeUiRoot() {
+  const listeners = [];
+  const shadow = {
+    addEventListener(type, fn, capture) { listeners.push({ type, fn, capture: !!capture }); }
+  };
+  const host = {
+    id: '',
+    attachShadow() { return shadow; },
+    isConnected: true
+  };
+  const documentStub = {
+    querySelectorAll: () => [],
+    createElement: () => host,
+    body: { appendChild() {} },
+    documentElement: { appendChild() {} }
+  };
+  // uiHost/uiRoot/uiSuspended are IIFE-scoped in content.js -> declare them as
+  // locals of the wrapper so the sliced function assigns into this closure.
+  const getUiRoot = new Function('document', `
+    let uiHost = null;
+    let uiRoot = null;
+    let uiSuspended = false;
+    ${extractFn('getUiRoot')}
+    return getUiRoot;
+  `)(documentStub);
+  return { getUiRoot, listeners, host, shadow };
+}
+
+const ui = makeUiRoot();
+const root = ui.getUiRoot();
+
+check('U1: shadow root swallows key events from the add-in UI (keydown/keyup/keypress, bubble)',
+  root === ui.shadow && ui.listeners.length === 3 &&
+  ['keydown', 'keyup', 'keypress'].every((t) =>
+    ui.listeners.some((l) => l.type === t && l.capture === false)),
+  'listeners=' + JSON.stringify(ui.listeners.map((l) => l.type + (l.capture ? ':capture' : ':bubble'))));
+
+// Minimal propagation model with the shadow root between document and target.
+function fireThrough(nodes, path, ev) {
+  for (const n of path) {
+    for (const l of nodes[n]) {
+      if (l.type !== ev.type || !l.capture) continue;
+      l.fn(ev);
+      if (ev.__immediate) return;
+    }
+    if (ev.__stopped) return;
+  }
+  for (const n of path.slice().reverse()) {
+    for (const l of nodes[n]) {
+      if (l.type !== ev.type || l.capture) continue;
+      l.fn(ev);
+      if (ev.__immediate) return;
+    }
+    if (ev.__stopped) return;
+  }
+}
+const UI_PATH = ['window', 'document', 'shadowRoot', 'target'];
+const makeKeyEvent = (props) => Object.assign({
+  type: 'keydown', key: 'n', defaultPrevented: false, __stopped: false, __immediate: false,
+  preventDefault() { this.defaultPrevented = true; },
+  stopPropagation() { this.__stopped = true; },
+  stopImmediatePropagation() { this.__stopped = true; this.__immediate = true; }
+}, props);
+
+function uiCase(installShippedListeners) {
+  const nodes = { window: [], document: [], shadowRoot: [], target: [] };
+  const add = (n, type, fn, capture) => nodes[n].push({ type, fn, capture: !!capture });
+  const state = { pageRuns: 0, inputRuns: 0, guardRuns: 0 };
+
+  if (installShippedListeners) {
+    for (const l of ui.listeners) add('shadowRoot', l.type, l.fn, l.capture);
+  }
+  // The page's handler, exactly like board-shortcuts.js: document, bubble.
+  add('document', 'keydown', (e) => { state.pageRuns++; e.preventDefault(); }, false);
+  // The input's own Enter handler (target phase) must still run.
+  add('target', 'keydown', () => { state.inputRuns++; }, false);
+  // The add-in's shortcut guard: window, capture (registered at document_start).
+  add('window', 'keydown', () => { state.guardRuns++; }, true);
+
+  const ev = makeKeyEvent({});
+  fireThrough(nodes, UI_PATH, ev);
+  return { state, ev };
+}
+
+{
+  const { state, ev } = uiCase(true);
+  check('U2: a page keydown handler on document never sees our UI keystrokes',
+    state.pageRuns === 0 && ev.defaultPrevented === false && ev.__stopped === true,
+    'pageRuns=' + state.pageRuns + ' prevented=' + ev.defaultPrevented);
+  check('U3: the input itself still receives the keystroke',
+    state.inputRuns === 1, 'inputRuns=' + state.inputRuns);
+  check('U4: the add-in shortcut guard (window capture) still sees it',
+    state.guardRuns === 1, 'guardRuns=' + state.guardRuns);
+}
+{
+  // Control: without the shipped listeners the page handler swallows the key —
+  // this is the reported bug, so the test above is meaningful.
+  const { state, ev } = uiCase(false);
+  check('U5: control — without the listeners the page handler swallows the character',
+    state.pageRuns === 1 && ev.defaultPrevented === true);
+}
+
 // --- 4) Thunderbird overlay ------------------------------------------------
 check('T1: TB registers the guard as a document_start compose script',
   /id: "llm-compose-shortcut-guard",\s*js: \["\/shortcuts\.js"\],\s*runAt: "document_start"/.test(tbBg));

@@ -58,6 +58,21 @@
     uiHost = document.createElement('div');
     uiHost.id = 'llm-assistant-ui-host';
     uiRoot = uiHost.attachShadow({ mode: 'closed' });
+    // Keystrokes typed into our UI must never reach page-level key handlers.
+    // For a closed shadow root the page sees `e.target` retargeted to the HOST
+    // div, so a page's "is the user typing in a field?" check
+    // (tagName === INPUT/…, isContentEditable) fails and its preventDefault()
+    // swallows the character — and its shortcut actions can even steal the
+    // focus away. Observed on the MiniKanban board (wwwroot/js/board-shortcuts.js,
+    // a keydown handler on `document`): n/b/f/a/c/s/w/t and "/" never arrived in
+    // the free-prompt input, "n" opened the Add-Card modal and "/" moved focus
+    // to the board search field. Stopping propagation at our own subtree keeps
+    // the events inside the extension. The capture-phase shortcut guard on
+    // `window` (shortcuts.js) runs BEFORE this and is unaffected, so the
+    // add-in's own shortcuts still work.
+    for (const type of ['keydown', 'keyup', 'keypress']) {
+      uiRoot.addEventListener(type, (e) => e.stopPropagation());
+    }
     (document.body || document.documentElement).appendChild(uiHost);
     return uiRoot;
   }
