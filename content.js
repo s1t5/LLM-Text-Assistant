@@ -1256,16 +1256,27 @@
   // (live range), null = whole field. Staged chain, each step verified before
   // the next — a step that already landed stops the chain, a mis-placed
   // result is cleaned up by the next stage instead of stacked upon:
-  //   0. sync editing pipeline write (works for Draft.js/Lexical/ProseMirror)
-  //      → delayed gate (350 ms): catches the CKEditor/Teams async revert
-  //      (the DOM shows the write, the editor's model never took it, the
-  //      next render cycle restores the old text)
+  //   0. one editing-pipeline write, then WAIT for the engine before reading
+  //      back. Two reasons the wait is mandatory (both verified against real
+  //      Firefox 159 + Lexical):
+  //        a) Firefox applies execCommand asynchronously — the DOM still
+  //           shows the OLD text when the call returns, so a synchronous
+  //           read-back always fails and used to trigger the repair dance
+  //           (delete + re-insert) on top of a write that was already
+  //           correct. Reddit/Lexical ended up with stacked copies ("ol!").
+  //        b) model-owning editors pick a programmatic DOM selection up on
+  //           their own schedule.
+  //      The delayed gate also catches the CKEditor/Teams async revert (the
+  //      DOM shows the write, the editor's model never took it, the next
+  //      render cycle restores the old text).
   //   1. paste over a DOM select-all, after a pause for the framework's
   //      async selection observer (CKEditor converts DOM selections into
-  //      model selections only debounced — proven with real CKEditor 5)
+  //      model selections only debounced — proven with real CKEditor 5).
+  //      Firefox cannot construct a ClipboardEvent that carries data, so a
+  //      missing paste falls back to the settled pipeline write.
   //   2. recovery: pipeline delete-all (clears pipeline-accepting models),
-  //      then paste at the collapsed caret
-  //   3. last resort: final sync pipeline write (undo toast protects the user)
+  //      then the settled write at the collapsed caret
+  //   3. chain exhausted: leave the field as-is (undo toast protects the user)
   // The token cancels the whole chain the moment a new action or undo runs.
   function scheduleFrameworkPasteWrite(el, newText, optRange, beforeText, attempt) {
     const myToken = ++pasteWriteToken;
@@ -1294,15 +1305,29 @@
         selection.addRange(r);
       } catch (e) { /* ignore */ }
     };
-    const pipelineWrite = () => {
+    // One pipeline write, deliberately WITHOUT a read-back in the same task:
+    // Firefox applies execCommand asynchronously, so reading here always sees
+    // the old text. The caller gates after settle().
+    const writeOnce = () => {
       try {
         if (optRange && rangeIsWithin(optRange, el)) {
           return execInsertTextCE(el, optRange, newText);
         }
-        return execSetCEText(el, newText);
+        const all = document.createRange();
+        all.selectNodeContents(el);
+        return execInsertTextCE(el, all, newText);
       } catch (e) {
         return false;
       }
+    };
+    // Give the engine time to apply a command and to re-render its model:
+    // two animation frames (the mutation lands after the issuing task in
+    // Firefox) plus a short settle for framework render schedules.
+    const settle = (fn, extraMs) => {
+      const raf = (typeof requestAnimationFrame === 'function')
+        ? requestAnimationFrame
+        : (cb) => setTimeout(cb, 16);
+      raf(() => raf(() => setTimeout(fn, extraMs || 100)));
     };
     const pasteAtCaret = () => {
       try {
@@ -1316,11 +1341,21 @@
       if (myToken !== pasteWriteToken || !isNodeInDocument(el)) return;
       if (verify()) return; // landed — stop the chain
       if (n === 0) {
-        // Sync pipeline write. Its immediate DOM readback CANNOT be trusted
-        // for model-owning editors (the model may revert it later) — the
-        // delayed gate below is the real verdict.
-        pipelineWrite();
-        setTimeout(() => stage(1), 350);
+        // Settled pipeline write. The immediate DOM readback CANNOT be
+        // trusted (async command application, async model revert) — the
+        // delayed gate below is the real verdict. The selection also needs a
+        // frame: a model-owning editor only adopts a programmatic DOM
+        // selection on its own (async) schedule, and an insertText issued
+        // before that replaces/inserts at the stale model selection.
+        selectTarget();
+        settle(() => {
+          if (myToken !== pasteWriteToken || !isNodeInDocument(el)) return;
+          writeOnce();
+          // 350 ms: the same gate that catches the CKEditor/Teams async
+          // revert. Shortening it would accept a DOM write the model is
+          // about to throw away.
+          settle(() => stage(1), 350);
+        }, 60);
         return;
       }
       if (n === 1) {
@@ -1332,9 +1367,12 @@
           if (verify()) return;
           selectTarget(); // frameworks re-render during the pause
           if (!pasteAtCaret()) {
-            console.warn("[LLM Content] Synthetic paste unavailable, using editing pipeline");
-            pipelineWrite();
-            setTimeout(() => stage(3), 300);
+            // Firefox cannot construct a ClipboardEvent carrying data. The
+            // selection has settled by now, so a plain pipeline write lands
+            // through the editor's model.
+            console.warn("[LLM Content] Synthetic paste unavailable, using settled editing pipeline");
+            writeOnce();
+            settle(() => stage(2), 250);
             return;
           }
           setTimeout(() => stage(2), 400);
@@ -1344,13 +1382,14 @@
       if (n === 2) {
         // Recovery: clear the field through the pipeline (models that take
         // pipeline writes are now empty and their caret collapsed at the
-        // start), then paste the full text at that caret.
+        // start), then write the full text at that caret.
         try { execDeleteCEContents(el); } catch (e) { /* ignore */ }
         setTimeout(() => {
           if (myToken !== pasteWriteToken || !isNodeInDocument(el)) return;
           if (verify()) return;
           if (!pasteAtCaret()) {
-            pipelineWrite(); // restore at least the text
+            writeOnce(); // restore at least the text
+            settle(() => stage(3), 250);
             return;
           }
           setTimeout(() => stage(3), 400);
@@ -2556,6 +2595,10 @@
   let chatWindow = null;
   let chatMessages = []; // Conversation history for the current chat session
   let pendingElement = null;
+  // Caret/selection in the edited field at the moment the chat was opened.
+  // The chat input takes the focus; without restoring this, closing the chat
+  // leaves the document without an editable target (see restoreEditorFocus).
+  let pendingCaretRange = null;
   let chatStreamingBubble = null;
   let chatStreamingText = "";
   let chatSendBtn = null;
@@ -2661,6 +2704,10 @@
     if (uiSuspended) return;
     if (!activeInputElement) return;
     pendingElement = activeInputElement;
+    // Remember where the caret was: the chat input steals the focus and
+    // closing the window must hand it back (Thunderbird: the compose body IS
+    // document.body — losing the caret there makes the mail uneditable).
+    pendingCaretRange = captureCaretRange(pendingElement);
 
     hideActionMenu();
     hideFloatingIcon();
@@ -3245,6 +3292,12 @@
     if (currentRequestId !== null) {
       cancelCurrentRequest();
     }
+    // The chat input owns the focus while the window is open; the element it
+    // was opened from is the one that must get it back (applyLastResult
+    // clears pendingElement but keeps activeInputElement).
+    const focusTarget = pendingElement || activeInputElement;
+    const caretRange = pendingCaretRange;
+    pendingCaretRange = null;
     if (chatWindow) {
       chatWindow.remove();
       chatWindow = null;
@@ -3254,6 +3307,7 @@
       chatSendBtn = null;
       chatInputField = null;
     }
+    restoreEditorFocus(focusTarget, caretRange);
   }
 
   // =====================================================================
@@ -3285,6 +3339,52 @@
       floatingIcon.title = '';
       floatingIcon.style.cursor = 'grab';
     }
+  }
+
+  // Remember the caret/selection inside `el` so a UI overlay that takes the
+  // focus (free-prompt chat) can hand it back afterwards. Returns null when
+  // the selection does not live inside the field.
+  function captureCaretRange(el) {
+    try {
+      const selection = window.getSelection();
+      if (!el || !selection || selection.rangeCount === 0) return null;
+      const range = selection.getRangeAt(0);
+      if (!range) return null;
+      const node = range.commonAncestorContainer;
+      if (node !== el && !el.contains(node)) return null;
+      return range.cloneRange();
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // Hand focus and caret back to `el` after an overlay closed. Removing the
+  // focused overlay element leaves document.activeElement on <body>; in
+  // Thunderbird document.body IS the compose body, so the mail lost its caret
+  // and could not be typed into until the user clicked it again. A range that
+  // went stale in the meantime (e.g. the field was rewritten by "apply")
+  // falls back to the end of the field.
+  function restoreEditorFocus(el, range) {
+    if (!el || !isNodeInDocument(el)) return;
+    try {
+      el.focus({ preventScroll: true });
+    } catch (e) {
+      try { el.focus(); } catch (e2) { /* ignore */ }
+    }
+    if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+      return; // focus() restores the element's own selection state
+    }
+    if (!el.isContentEditable) return;
+    try {
+      const selection = window.getSelection();
+      if (range && isNodeInDocument(range.startContainer) &&
+          (el === range.startContainer || el.contains(range.commonAncestorContainer))) {
+        selection.removeAllRanges();
+        selection.addRange(range);
+        return;
+      }
+    } catch (e) { /* ignore */ }
+    anchorCaretAtEnd(el);
   }
 
   // Anchor the live DOM selection at the end of el's content. Used after raw
