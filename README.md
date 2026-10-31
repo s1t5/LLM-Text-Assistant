@@ -129,6 +129,12 @@ On pages that register their own single-key shortcuts on `document`, the free-pr
 
 Keystrokes typed into the add-in's own UI now stop at the extension's shadow root and never reach the page, while the add-in's own shortcuts (window-capture guard) keep working. Page handlers registered in the *capture* phase on `window`/`document` still run first — they cannot be intercepted from inside, and intercepting them would break the field itself.
 
+## 🆕 v1.6.6 — fix: caret loss in Thunderbird, broken whole-field replace in Firefox
+
+**Thunderbird: the mail became uneditable after opening the free-prompt chat.** The chat window focuses its input; closing it removed the overlay without handing the focus back, so `document.activeElement` ended up on `<body>` with the selection parked inside the extension's shadow root. In Thunderbird `document.body` **is** the compose body, so the mail had neither focus nor caret until you clicked into it again. The caret range is now captured when the chat opens and restored when it closes (falling back to the end of the field if the range went stale, e.g. after **Apply**).
+
+**Firefox: translating a comment on Reddit ended with a fragment ("ol!") instead of the result.** Firefox applies `document.execCommand('insertText')` **asynchronously** — right after the call the DOM (and therefore `innerText`/`textContent`) still shows the old text. The framework write chain verified synchronously, concluded the (already correct) write had failed, and ran its repair path (delete + re-insert), which Lexical then reconciled against its own model, leaving stacked or chopped copies. The chain now writes once, waits two animation frames plus a short settle, and only then verifies; the paste stage stays for editors that ignore `insertText`, and Firefox (which cannot construct a `ClipboardEvent` carrying data) falls back to the settled pipeline write.
+
 ## 🔒 Privacy & Security Notes
 
 - **No data collection**: The extension collects nothing. API calls go directly from your browser to the endpoint you configured, there is no intermediate server
