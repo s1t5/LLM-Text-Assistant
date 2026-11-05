@@ -6,8 +6,11 @@
 //                   insertParagraph → paragraph split (mail composer splits paragraphs)
 //  - WebKit:        insertLineBreak → <br>
 // The simulation asserts the *decision logic*: multiline goes line-by-line,
-// break via insertLineBreak with insertParagraph fallback, single-line and
-// empty payloads keep the old code path.
+// a single "\n" becomes a soft break (insertLineBreak → <br>) and "\n\n" a
+// real paragraph (insertParagraph), single-line and empty payloads keep the
+// old code path. Until v1.6.6 every "\n" was written as insertLineBreak,
+// which collapsed paragraph boundaries into the same paragraph and made
+// plain line breaks look like paragraphs after Thunderbird re-rendered.
 
 const fs = require('fs');
 const src = fs.readFileSync(__dirname + '/content.js', 'utf8');
@@ -28,7 +31,7 @@ function makeEnv(engine) {
     // engines: insertText with \n returns true but inserts plain text (the bug)
     insertText: { ok: true },
     insertLineBreak: { ok: engine.hasInsertLineBreak },
-    insertParagraph: { ok: true },
+    insertParagraph: { ok: engine.hasInsertParagraph !== false },
     delete: { ok: true },
   };
   return { calls, sel, commands };
@@ -54,28 +57,35 @@ function runExtracted(engine, text) {
 }
 
 const engines = [
-  { name: 'Blink (Chrome)', hasInsertLineBreak: true },
-  { name: 'Gecko (Thunderbird/Firefox)', hasInsertLineBreak: true },
-  { name: 'Legacy engine without insertLineBreak', hasInsertLineBreak: false },
+  { name: 'Blink (Chrome)', hasInsertLineBreak: true, hasInsertParagraph: true },
+  { name: 'Gecko (Thunderbird/Firefox)', hasInsertLineBreak: true, hasInsertParagraph: true },
+  { name: 'Legacy engine without insertLineBreak', hasInsertLineBreak: false, hasInsertParagraph: true },
+  { name: 'Legacy engine without insertParagraph', hasInsertLineBreak: true, hasInsertParagraph: false },
 ];
 
 let fails = 0;
 for (const engine of engines) {
   console.log('\n=== ' + engine.name + ' ===');
 
-  // Multiline: line-by-line, breaks as real commands.
-  // In the legacy engine the failed insertLineBreak attempt is recorded too
-  // (instrumentation), then the insertParagraph fallback runs — correct.
+  // Multiline: line-by-line, soft break for "\n", paragraph for "\n\n".
+  // In the legacy engine the failed insertParagraph attempt is recorded too
+  // (instrumentation), then the insertLineBreak fallback runs — correct.
   let r = runExtracted(engine, 'Zeile1\nZeile2\n\nZeile4');
   const expected = [];
-  const lines = ['Zeile1', 'Zeile2', '', 'Zeile4'];
-  for (let li = 0; li < lines.length; li++) {
-    if (lines[li].length > 0) expected.push(['insertText', lines[li]]);
-    if (li < lines.length - 1) {
-      if (!engine.hasInsertLineBreak) expected.push(['insertLineBreak', null]); // failed attempt
-      expected.push([engine.hasInsertLineBreak ? 'insertLineBreak' : 'insertParagraph', null]);
-    }
+  // "Zeile1\nZeile2" = one paragraph with a soft break, "\n\n" = paragraph.
+  expected.push(['insertText', 'Zeile1']);
+  if (!engine.hasInsertLineBreak) expected.push(['insertLineBreak', null]); // failed attempt
+  expected.push([engine.hasInsertLineBreak ? 'insertLineBreak' : 'insertParagraph', null]);
+  expected.push(['insertText', 'Zeile2']);
+  if (!engine.hasInsertParagraph) {
+    // Failed attempt, then the paragraph is approximated by two soft breaks.
+    expected.push(['insertParagraph', null]);
+    expected.push(['insertLineBreak', null]);
+    expected.push(['insertLineBreak', null]);
+  } else {
+    expected.push(['insertParagraph', null]);
   }
+  expected.push(['insertText', 'Zeile4']);
   const ok1 = r.ok === true && JSON.stringify(r.calls) === JSON.stringify(expected);
   if (!ok1) fails++;
   console.log((ok1 ? 'PASS' : 'FAIL') + ' multiline sequence: ' + JSON.stringify(r.calls));

@@ -39,6 +39,7 @@ Firefox-/Thunderbird-Manifeste injiziert.
 
 ```bash
 node test-insert-ce.js         # mehrzeilige execInsertTextCE-Kommando-Sequenzen
+node test-linebreaks.js        # Umbruch (\n) vs. Absatz (\n\n), CRLF, Lese-Seite blockbewusst
 node test-ce-finalize.js       # Marker-/Fragment-Cleanup, Caret, TB-Pipeline-Routing
 node test-exec-set-ce.js       # Ganzfeld-Write-Verifikation (Replace/Stack/Broken-Engine)
 node test-free-prompt-route.js # contextMenuProcess-Routing + Focus-Erkennung
@@ -426,6 +427,45 @@ dem Code vor dem Fix fehl) + E2E
 Default-Aktion nicht aus). Vor dem Fix: Feld leer, `prevented=true` für alle
 neun Zeichen, Board-Aktion gefeuert, Fokus im Suchfeld. Danach: `nbfacswt/hello`
 kommt vollständig an, die Seite sieht nichts.
+
+## v1.6.7 — Umbrüche wurden zu Absätzen (Thunderbird)
+
+**Symptom:** Nach einer Selektions-Ersetzung im Thunderbird-Compose stimmten die
+Umbrüche nicht mehr — was vorher ein einfacher Zeilenumbruch war, stand danach als
+Absatz da (und umgekehrt gingen Absatzgrenzen verloren).
+
+**Ursache (zwei Hälften, beide im Add-in):**
+
+1. **Schreibseite:** `execInsertTextCE` setzte **jeden** `\n` als
+   `execCommand('insertLineBreak')` → `<br>`. `<br>` ist in Thunderbirds
+   Gecko-HTML-Editor ein *weicher* Umbruch innerhalb desselben Absatzes;
+   Absatzgrenzen sind Blockelemente (`<div>`/`<p>`). Ein Absatz aus dem
+   LLM-Ergebnis (`\n\n`) wurde damit zu zwei `<br>` im selben Absatz, und ein
+   einfacher Umbruch wurde beim Re-Rendern/Serialisieren als Absatz dargestellt.
+2. **Leseseite:** `getElementFullText`/`getElementSelection` lasen per
+   `innerText`/`Selection.toString()`, wo Blockgrenzen **und** `<br>` beide als
+   `\n` erscheinen. Das Modell bekam also gar keine Information darüber, welche
+   Umbrüche Absätze waren — es konnte die Struktur prinzipiell nicht erhalten.
+
+**Fix (v1.6.7), beide Seiten:**
+
+- **Schreiben:** `execInsertTextCE` trennt Absatz-Blöcke (`/\n{2,}/`) von Zeilen
+  (`\n`). Absatz → `insertParagraph` (Fallback: zwei `insertLineBreak`), Zeile →
+  `insertLineBreak` (Fallback: `insertParagraph`). `\r\n`/`\r` werden vorher
+  normalisiert. Zusätzliche Leerzeilen (`\n\n\n`) ergeben zusätzliche Absätze.
+- **Lesen:** neuer Helper `rangeToSourceText(range, root)` — `<br>` → `\n`,
+  Blockgrenze → `\n\n`, aufeinanderfolgende Umbrüche werden nicht gestapelt.
+  Genutzt von `getElementSelection` (CE-Zweig) **und** `getElementFullText`,
+  damit Selektions- und Ganzfeld-Pfad identisch lesen.
+
+**Merkregel:** `<br>` ≠ Absatz. Wer CE-Text schreibt, muss Absatz- und
+Zeilenumbruch unterscheiden; wer ihn liest, muss die Unterscheidung erhalten.
+Beide Richtungen zusammen halten — nur eine Seite zu fixen verschiebt den Fehler.
+
+Test: `test-linebreaks.js` (L1–L11: Umbruch/Absatz-Sequenzen je Engine,
+CRLF, Fallbacks, Lese-Seite) — `test-insert-ce.js` erwartet die neue Sequenz.
+E2E-Rundlauf (Identitäts-LLM, Gecko-Semantik) liegt außerhalb des Repos unter
+`~/work/llm-nl/e2e-roundtrip.js`: alter Code 4/4 rot, neuer Code 4/4 grün.
 
 ## Mehrsprachigkeit (i18n)
 
