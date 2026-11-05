@@ -1142,6 +1142,25 @@
   function execInsertTextCE(el, range, text) {
     try {
       el.focus();
+
+      // Paragraph break: a real block boundary (Enter). Falls back to a soft
+      // break when the engine has no insertParagraph, so nothing is lost.
+      const insertParagraphBreak = () => {
+        if (document.execCommand("insertParagraph")) return true;
+        if (document.execCommand("insertLineBreak")) {
+          // Two soft breaks in a row render as a blank line — closest
+          // available approximation of a paragraph break.
+          return document.execCommand("insertLineBreak") ? true : false;
+        }
+        return false;
+      };
+      // Soft line break inside the paragraph (Shift+Enter).
+      const insertSoftBreak = () => {
+        if (document.execCommand("insertLineBreak")) return true;
+        if (document.execCommand("insertParagraph")) return true;
+        return false;
+      };
+
       const selection = window.getSelection();
       selection.removeAllRanges();
       selection.addRange(range);
@@ -1149,24 +1168,40 @@
       // breaks as *plain text* — most editors (and Thunderbird's compose body)
       // don't render a bare "\n" text node as a line break, so every newline
       // silently disappears. Instead insert line by line and issue a real
-      // line break (like pressing Enter) between the lines: <br> via
-      // insertLineBreak (what the pre-framework code inserted), falling back
-      // to insertParagraph where insertLineBreak is unsupported.
-      const s = String(text);
+      // break (like pressing Enter) between the lines.
+      //
+      // TWO kinds of break (since v1.6.7):
+      //   "\n"   -> insertLineBreak  => <br>, a SOFT break inside the current
+      //             paragraph (what Shift+Enter does)
+      //   "\n\n" -> insertParagraph   => a real new paragraph
+      // Writing every "\n" as insertLineBreak collapsed paragraph boundaries
+      // into the same paragraph and made plain line breaks look like
+      // paragraphs after Thunderbird re-rendered/serialized the body.
+      const s = String(text).replace(/\r\n?/g, "\n");
       if (s.indexOf("\n") !== -1) {
         let ok = true;
-        const lines = s.split("\n");
-        for (let i = 0; i < lines.length; i++) {
-          if (lines[i].length > 0) {
-            if (!document.execCommand("insertText", false, lines[i])) ok = false;
+        // Split into paragraph blocks first: "\n\n" separates paragraphs,
+        // single "\n" separates lines inside a paragraph. Re-joining with
+        // the right command keeps the author's structure intact.
+        const blocks = s.split(/\n{2,}/);
+        for (let b = 0; b < blocks.length; b++) {
+          if (b > 0) {
+            // Paragraph break. Blank lines beyond the first ("\n\n\n") become
+            // additional empty paragraphs so they survive as empty lines.
+            const blanks = (s.match(/\n{2,}/g) || [])[b - 1].length - 2;
+            const paras = 1 + Math.max(0, blanks);
+            for (let p = 0; p < paras; p++) {
+              if (!insertParagraphBreak()) ok = false;
+            }
           }
-          if (i < lines.length - 1) {
-            // insertLineBreak → <br> (matches the pre-framework behavior);
-            // fall back to insertParagraph only if the engine lacks it.
-            if (!document.execCommand("insertLineBreak")) {
-              if (!document.execCommand("insertParagraph")) {
-                ok = false;
-              }
+          const lines = blocks[b].split("\n");
+          for (let i = 0; i < lines.length; i++) {
+            if (lines[i].length > 0) {
+              if (!document.execCommand("insertText", false, lines[i])) ok = false;
+            }
+            if (i < lines.length - 1) {
+              // Soft line break inside the paragraph: <br>.
+              if (!insertSoftBreak()) ok = false;
             }
           }
         }
@@ -1548,6 +1583,60 @@
   //  ACTION EXECUTION (floating menu + context menu)
   // =====================================================================
 
+  // Walk a range and rebuild its text with the author's line structure:
+  //   <br>                      -> "\n"    (soft line break)
+  //   block boundary (div/p/…)  -> "\n\n"  (paragraph)
+  // Consecutive breaks are collapsed so a paragraph followed by an empty
+  // paragraph does not explode into three newlines. This is the read-side
+  // counterpart of execInsertTextCE's write side: without it every paragraph
+  // boundary reached the LLM as a plain "\n" and came back as a soft break.
+  function rangeToSourceText(range, root) {
+    const BLOCK = /^(ADDRESS|ARTICLE|ASIDE|BLOCKQUOTE|DD|DIV|DL|DT|FIGCAPTION|FIGURE|FOOTER|H[1-6]|HEADER|HR|LI|MAIN|NAV|OL|P|PRE|SECTION|TABLE|TBODY|TD|TFOOT|TH|THEAD|TR|UL)$/;
+    let out = '';
+    const push = (s) => { out += s; };
+    const pushBreak = (n) => {
+      // Never stack breaks: at most one blank line between blocks.
+      if (out.length === 0) return;
+      const trailing = out.length - out.replace(/\n+$/, '').length;
+      if (trailing >= n) return;
+      push('\n'.repeat(n - trailing));
+    };
+
+    const walk = (node) => {
+      if (node.nodeType === 3) {
+        if (!range.intersectsNode || range.intersectsNode(node)) {
+          // Keep only the part of the text node the range actually covers.
+          let start = 0, end = node.length;
+          try {
+            if (node === range.startContainer) start = range.startOffset;
+            if (node === range.endContainer) end = range.endOffset;
+          } catch (e) { /* ignore */ }
+          if (end > start) push(node.data.slice(start, end));
+        }
+        return;
+      }
+      if (node.nodeType !== 1) return;
+      if (!range.intersectsNode || range.intersectsNode(node)) {
+        // fall through and descend
+      } else if (node !== root) {
+        return;
+      }
+      const tag = node.tagName.toUpperCase();
+      if (tag === 'BR') {
+        pushBreak(1);
+        return;
+      }
+      const isBlock = BLOCK.test(tag);
+      if (isBlock) pushBreak(2);
+      for (const child of Array.from(node.childNodes)) walk(child);
+      if (isBlock) pushBreak(2);
+    };
+
+    walk(root);
+    // Trim leading/trailing blank lines; internal structure stays intact.
+    return out.replace(/^\n+/, '').replace(/\n+$/, '');
+  }
+
   // Returns the non-collapsed selection inside el, or null when nothing
   // is selected. Shape: {mode:'range',start,end,text}
   //                  or  {mode:'ce',range,text}
@@ -1581,7 +1670,13 @@
         // which silently stripped line breaks from multi-line selections —
         // the LLM then returned single-line results that were inserted
         // without breaks (regression since 8cb1132, fixed in v1.5.10).
-        text: selection.toString(),
+        //
+        // Since v1.6.7 the source text is block-aware: paragraph boundaries
+        // become "\n\n" and soft breaks stay "\n", so the LLM sees (and can
+        // reproduce) the author's structure. Plain Selection.toString() maps
+        // BOTH to "\n", which made every paragraph come back as a line break
+        // and every line break come back as a paragraph.
+        text: rangeToSourceText(range, el),
       };
     }
 
@@ -2371,6 +2466,15 @@
     if (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA') {
       return element.value || '';
     } else if (element.isContentEditable) {
+      // Block-aware read (v1.6.7): paragraph boundaries as "\n\n", soft
+      // breaks as "\n". innerText maps both to "\n", which is exactly the
+      // information the write side needs to reproduce the author's layout.
+      try {
+        const range = document.createRange();
+        range.selectNodeContents(element);
+        const text = rangeToSourceText(range, element);
+        if (text.trim()) return text;
+      } catch (e) { /* fall through */ }
       return element.innerText || element.textContent || '';
     }
     return '';

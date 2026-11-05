@@ -93,6 +93,8 @@ Open the extension options (puzzle icon in the toolbar → **LLM Text Assistant*
 
 **Line breaks**: line breaks in the result are always preserved — for selections and for whole-field processing alike.
 
+**Line break vs. paragraph** (v1.6.7): the add-in now distinguishes the two. A single `\n` is written as a *soft* line break (`<br>`, what Shift+Enter produces) and a blank line (`\n\n`) as a real new paragraph (block, what Enter produces). Before v1.6.7 every `\n` went in as a soft break, so paragraph boundaries collapsed into one paragraph and plain line breaks were re-rendered as paragraphs after Thunderbird serialized the body. The read side matches: the text sent to the model keeps paragraphs as `\n\n` and line breaks as `\n` (previously both arrived as `\n`, so the model could not tell them apart and never reproduced them correctly).
+
 **Editing after a replacement**: the caret is re-anchored right after the replaced text, and all streaming helper nodes (markers) are removed when the replacement completes — the field stays fully editable afterwards, including in Thunderbird's compose window (v1.5.8 fixed a caret-jumps-to-the-start bug there).
 
 **Streaming in Thunderbird / framework editors** (v1.5.9): results are written to the field in a single pass on completion instead of rewriting the whole field per token. Previously, per-token select-all rewrites through the editor pipeline could stack partial snapshots of the text when the editor's selection state was stale (observed in Thunderbird's compose window as repeated, shrinking copies of the mail text).
