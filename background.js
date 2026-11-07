@@ -836,7 +836,14 @@ async function loadActionsForContent() {
 
   return {
     builtin: getBuiltinActions(targetLanguage).map(a => ({ id: a.id, title: a.title })),
-    custom: customActions.filter(a => a.title && a.title.trim()),
+    // Custom actions must carry their action id (`custom_<index>`) — consumers
+    // send `action.id` back as `textAction`, and an undefined id makes the
+    // handler crash on `action.startsWith("custom_")`. The index has to be the
+    // ORIGINAL list index (content.js resolves `custom_<i>` against
+    // `config.customActions`), so map first, then filter.
+    custom: customActions
+      .map((a, i) => ({ ...a, id: `custom_${i}` }))
+      .filter(a => a.title && a.title.trim()),
     freePromptEnabled: freePromptEnabled,
     builtinShortcuts: config.builtinShortcuts && typeof config.builtinShortcuts === 'object' ? config.builtinShortcuts : {},
     freePromptShortcut: typeof config.freePromptShortcut === 'string' ? config.freePromptShortcut : ""

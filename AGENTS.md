@@ -467,6 +467,35 @@ CRLF, Fallbacks, Lese-Seite) — `test-insert-ce.js` erwartet die neue Sequenz.
 E2E-Rundlauf (Identitäts-LLM, Gecko-Semantik) liegt außerhalb des Repos unter
 `~/work/llm-nl/e2e-roundtrip.js`: alter Code 4/4 rot, neuer Code 4/4 grün.
 
+## v1.6.8 — Eigene Aktionen in Thunderbird unbenutzbar („action is undefined")
+
+**Symptom:** Im Compose-Toolbar-Popup von Thunderbird scheiterte jede **selbst
+angelegte Aktion** mit `LLM Text Assistent: can't access property "startsWith",
+action is undefined`. Built-ins und die Browser-Version funktionierten.
+
+**Ursache:** Das Popup baut seine Buttons aus der Liste, die
+`loadActionsForContent()` im Background liefert. Built-ins bekamen dort ein `id`,
+Custom Actions wurden als **rohe** gespeicherte Objekte durchgereicht
+(`emoji`, `title`, `prompt`, `showInContextMenu`, `shortcut`) — **ohne** `id`.
+Der Klick-Handler des Popups sendet `action.id` als `textAction`, also
+`undefined`; das landete ungeprüft im Prompt-Aufbau und riss
+`action.startsWith('custom_')` ab.
+
+**Fix (v1.6.8):** `loadActionsForContent()` vergibt das `id` (`custom_<index>`)
+**vor** dem Filter auf Aktionen mit Titel. Die Reihenfolge ist wichtig: der Index
+muss der Position in `config.customActions` entsprechen, weil `content.js`
+`custom_<i>` gegen genau dieses Array auflöst — nach dem Filtern würde eine
+Aktion ohne Titel die Indizes der folgenden verschieben. Beide Backgrounds
+(Root und TB-Overlay) tragen denselben Fix.
+
+**Merkregel:** Was eine UI-Schicht per `id` zurück an den Background schickt, muss
+die Lieferliste auch liefern. Listen-IDs immer aus dem **Originalindex** bilden,
+nie aus der Position nach einem Filter.
+
+Test: `test-custom-action-ids.js` (slicet `loadActionsForContent` aus **beiden**
+Backgrounds, prüft id-Präsenz, Originalindex, Feld­erhalt und den
+`startsWith`-Guard; auf dem alten Code 6 Fehler).
+
 ## Mehrsprachigkeit (i18n)
 
 Die Extension ist vollständig internationalisiert (aktuell Deutsch + Englisch).
