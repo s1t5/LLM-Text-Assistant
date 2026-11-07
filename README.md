@@ -137,6 +137,16 @@ Keystrokes typed into the add-in's own UI now stop at the extension's shadow roo
 
 **Firefox: translating a comment on Reddit ended with a fragment ("ol!") instead of the result.** Firefox applies `document.execCommand('insertText')` **asynchronously** — right after the call the DOM (and therefore `innerText`/`textContent`) still shows the old text. The framework write chain verified synchronously, concluded the (already correct) write had failed, and ran its repair path (delete + re-insert), which Lexical then reconciled against its own model, leaving stacked or chopped copies. The chain now writes once, waits two animation frames plus a short settle, and only then verifies; the paste stage stays for editors that ignore `insertText`, and Firefox (which cannot construct a `ClipboardEvent` carrying data) falls back to the settled pipeline write.
 
+## 🆕 v1.6.8 — fix: custom actions unusable in Thunderbird ("action is undefined")
+
+**Symptom:** In the Thunderbird compose toolbar, clicking a **self-defined action** failed with `LLM Text Assistent: can't access property "startsWith", action is undefined`. Built-in actions and the browser build worked fine.
+
+**Cause:** the compose-toolbar popup builds each button from the action list the background delivers (`loadActionsForContent`). Built-in actions got an `id`, custom actions were passed through as the raw stored objects (`emoji`, `title`, `prompt`, `showInContextMenu`, `shortcut`) — no `id`. The popup's click handler therefore sent `textAction: undefined` to the background, which passed it straight into prompt assembly and crashed on `action.startsWith('custom_')`.
+
+**Fix:** `loadActionsForContent` now assigns every custom action its id (`custom_<index>`) **before** filtering out untitled ones, so the index still matches the position in `customActions` (which is what `content.js` resolves against). Both the root and the Thunderbird background carry the same fix, so no target can drift.
+
+Test: `test-custom-action-ids.js` (slices `loadActionsForContent` out of both backgrounds; red on the previous code, green now).
+
 ## 🔒 Privacy & Security Notes
 
 - **No data collection**: The extension collects nothing. API calls go directly from your browser to the endpoint you configured, there is no intermediate server
