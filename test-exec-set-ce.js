@@ -22,6 +22,7 @@ function sliceFn(name) {
 }
 
 const code = [
+  sliceFn('detachUiHostWithin'),
   sliceFn('execSetCEText'),
   sliceFn('execDeleteCEContents'),
   sliceFn('execInsertTextCE'),
@@ -80,8 +81,10 @@ function makeEnv(kind) {
     addRange(range) { selectionNonCollapsed = !range.collapsed; }
   };
   const win = { getSelection: () => sel };
-  const factory = new Function('document', 'window', code);
-  const execSetCEText = factory(doc, win);
+  // detachUiHostWithin reads the extension's uiHost variable; these engine
+  // tests have no UI, so it stays null and the helper is a no-op.
+  const factory = new Function('document', 'window', 'uiHost', code);
+  const execSetCEText = factory(doc, win, null);
   return { execSetCEText, el, commands };
 }
 
