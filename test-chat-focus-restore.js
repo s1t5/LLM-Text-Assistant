@@ -121,7 +121,7 @@ function runRestore(opts) {
 // --- W: closeChatWindow wiring ---------------------------------------------
 function makeClose() {
   const seen = [];
-  const factory = new Function('restoreEditorFocus', `
+  const factory = new Function('restoreEditorFocus', 'isNodeInDocument', 'showFloatingIcon', `
     let currentRequestId = null;
     let cancelCurrentRequest = () => {};
     let chatWindow = null, chatMessages = [], chatStreamingBubble = null, chatStreamingText = "";
@@ -140,7 +140,7 @@ function makeClose() {
       state: () => ({ chatWindow, chatMessages, chatSendBtn, chatInputField, pendingCaretRange })
     };
   `);
-  const api = factory((el, range) => seen.push({ el, range }));
+  const api = factory((el, range) => seen.push({ el, range }), () => true, () => {});
   api.seen = seen;
   return api;
 }

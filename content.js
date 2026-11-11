@@ -462,16 +462,23 @@
     // window blur instead. activeInputElement is kept: the Thunderbird
     // toolbar popup and context-menu flows rely on the last focused field
     // while the compose frame itself is blurred.
-    window.addEventListener('blur', hideFloatingIcon);
+    window.addEventListener('blur', handleWindowBlur);
+    window.addEventListener('focus', handleWindowFocus);
 
     // A field may already hold focus when the script runs (e.g. Thunderbird
     // compose windows inject after load). Track it so shortcuts and the
-    // toolbar popup work — but do not force the floating icon, matching the
-    // previous behaviour where a focus before injection never showed it.
+    // toolbar popup work — and in Thunderbird also show the icon right away:
+    // the compose body keeps DOM focus, so a focusin may never follow and the
+    // icon would only appear once an action forces it. A short retry covers
+    // the case where the editor layout is not measured yet.
     const alreadyFocused = resolveEditingTarget();
     if (alreadyFocused) {
       uiSuspended = false;
       activeInputElement = alreadyFocused;
+      if (isThunderbirdUA()) {
+        showFloatingIcon();
+        setTimeout(showFloatingIcon, 250);
+      }
     }
 
     // Listen for storage changes to reload actions
@@ -489,6 +496,26 @@
     // targets without that guard (Thunderbird compose scripts, stale builds).
     window.addEventListener('keydown', handleShortcutKeydown, true);
     installShortcutGuardHook();
+  }
+
+  // Frame blur/focus handlers (all_frames). A frame that loses focus hides
+  // its icon, otherwise every iframe would keep a stale icon (and a compose
+  // window could show one icon at the subject and another in the body).
+  // The Thunderbird compose editor is a subframe of the compose window: it
+  // blurs whenever the compose chrome (subject line, toolbar, …) takes focus.
+  // Returning to the body then fires no focusin, because the body never lost
+  // DOM focus — so the window focus handler re-shows the icon explicitly.
+  function handleWindowBlur() {
+    hideFloatingIcon();
+  }
+
+  function handleWindowFocus() {
+    // The frame regained focus (toolbar popup closed, another frame left)
+    // and the field is still document.activeElement: no focusin will fire,
+    // so re-show the icon explicitly.
+    if (!uiSuspended && activeInputElement && isNodeInDocument(activeInputElement)) {
+      showFloatingIcon();
+    }
   }
 
   function isTextInput(el) {
@@ -568,6 +595,15 @@
   // Global click handler to detect clicks outside our UI
   document.addEventListener('click', (e) => {
     const target = e.target;
+
+    // In Thunderbird the compose body IS document.body: a click on the
+    // scrollbar or the document element is still inside the mail, not an
+    // outside click. Dropping the field there hid the icon for good, because
+    // no focusin follows to restore it.
+    if (isThunderbirdUA() &&
+        (target === document.documentElement || target === document.body)) {
+      return;
+    }
 
     // Clicks inside our shadow UI retarget to the uiHost — never treat
     // them as "outside" clicks.
@@ -1003,9 +1039,11 @@
     });
 
     actionMenu.addEventListener('mouseleave', () => {
+      // Only hide the menu. The icon and the remembered field must survive:
+      // the finish path re-shows the icon, and a late timer that also cleared
+      // activeInputElement made the icon disappear right after an action.
       hideTimeout = setTimeout(() => {
-        hideFloatingIcon();
-        activeInputElement = null;
+        hideActionMenu();
       }, 300);
     });
 
@@ -3496,6 +3534,12 @@
       chatInputField = null;
     }
     restoreEditorFocus(focusTarget, caretRange);
+    // The chat hid the icon when it opened; bring it back now that the editor
+    // owns the focus again (cancel path; applyLastResult shows it as well).
+    if (focusTarget && isNodeInDocument(focusTarget)) {
+      activeInputElement = focusTarget;
+      showFloatingIcon();
+    }
   }
 
   // =====================================================================
