@@ -147,6 +147,16 @@ Keystrokes typed into the add-in's own UI now stop at the extension's shadow roo
 
 Test: `test-custom-action-ids.js` (slices `loadActionsForContent` out of both backgrounds; red on the previous code, green now).
 
+## 🆕 v1.6.9 — fix: whole-mail replacement in Thunderbird killed the add-in UI
+
+**Symptom:** Running an action on the **entire mail** (no selection) in Thunderbird made the floating icon disappear after the replacement; the add-in could not be opened again.
+
+**Cause:** In the compose window `document.body` *is* the mail body, and the add-in's UI host (the closed shadow root holding the icon, menu, chat and toasts) is one of its children. A whole-field write selects all children of the body, so the first `insertText` deleted the host. `showFloatingIcon()` then styled the cached but detached icon and never rebuilt it — the add-in looked dead.
+
+**Fix:** the UI host is detached for the duration of a whole-field write and put back afterwards (also when the engine rejects the write). Cached UI references are checked for `isConnected` and rebuilt on the next show call, which also covers undo restores, reopened drafts and manual deletions.
+
+Test: `test-ui-host-survival.js` (host stays out of the first select-all and is restored after success/rejection; stale icon/menu/chat/diff/toast references are rebuilt).
+
 ## 🔒 Privacy & Security Notes
 
 - **No data collection**: The extension collects nothing. API calls go directly from your browser to the endpoint you configured, there is no intermediate server

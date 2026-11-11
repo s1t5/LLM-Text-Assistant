@@ -42,6 +42,7 @@ node test-insert-ce.js         # mehrzeilige execInsertTextCE-Kommando-Sequenzen
 node test-linebreaks.js        # Umbruch (\n) vs. Absatz (\n\n), CRLF, Lese-Seite blockbewusst
 node test-ce-finalize.js       # Marker-/Fragment-Cleanup, Caret, TB-Pipeline-Routing
 node test-exec-set-ce.js       # Ganzfeld-Write-Verifikation (Replace/Stack/Broken-Engine)
+node test-ui-host-survival.js  # UI-Host überlebt Ganzfeld-Write (Thunderbird)
 node test-free-prompt-route.js # contextMenuProcess-Routing + Focus-Erkennung
 node test-frame-routing.js     # all_frames + frame-sensitiver Message-Routing
 node test-v16-features.js      # diffWords, modelsUrlFromApiUrl, collectPageContext
@@ -495,6 +496,44 @@ nie aus der Position nach einem Filter.
 Test: `test-custom-action-ids.js` (slicet `loadActionsForContent` aus **beiden**
 Backgrounds, prüft id-Präsenz, Originalindex, Feld­erhalt und den
 `startsWith`-Guard; auf dem alten Code 6 Fehler).
+
+## v1.6.9 — Ganzfeld-Ersetzung in Thunderbird löschte das Add-in-UI
+
+**Symptom:** Wurde in Thunderbird eine Aktion auf die **gesamte Mail** (ohne
+vorherige Selektion) angewendet, verschwand nach dem Ersetzen das schwebende
+Icon; ein weiterer Aufruf war nicht mehr möglich.
+
+**Ursache:** Im Compose-Fenster ist `document.body` der Mail-Body. Der UI-Host
+(`#llm-assistant-ui-host`, closed shadow root mit Icon, Menü, Chat und Toasts)
+hängt als Kind darin. Die Ganzfeld-Ersetzung baut eine Range über
+`selectNodeContents(el)` — also über **alle** Kinder des Bodys, inklusive Host.
+Das erste `insertText` löschte den Host. `showFloatingIcon()` zeigte danach das
+gecachte, aber abgehängte Icon an (`floatingIcon.isConnected === false`), und
+`createFloatingIcon()` wurde nie wieder aufgerufen: das Add-in wirkte tot.
+
+**Fix (v1.6.9), zweiteilig:**
+1. `detachUiHostWithin(el)` nimmt den Host aus dem Feld, wenn er darin liegt,
+   und hängt ihn nach dem Write an derselben Position wieder ein — auch wenn
+   die Engine den Write ablehnt oder wirft (`try/finally`). Verwendet in
+   `execSetCEText` (Ganzfeld-Pipeline, TB), im Undo-Pipeline-Zweig von
+   `restoreUndoState` und beim direkten `innerText`-Write.
+2. `dropStaleUiRefs()` prüft die gecachten UI-Referenzen auf `isConnected` und
+   verwirft abgehängte Knoten (Icon, Menü, Chat, Diff-Overlay, Toast). Jeder
+   Show-Pfad (`showFloatingIcon`, `showProcessingIndicator`, `showActionMenu`,
+   `getUiElementById`) ruft das auf und baut die UI bei Bedarf in einem frischen
+   Host neu auf. Das fängt auch andere Wege ab, die den Host entfernen (Undo
+   stellt `innerHTML` wieder her, neu geöffneter Entwurf, manuelles Löschen).
+
+**Merkregel:** UI, die im editierbaren Bereich liegt, muss aus jedem
+`selectNodeContents`-Write herausgehalten werden — und jede gecachte
+DOM-Referenz braucht einen `isConnected`-Check, bevor sie benutzt wird.
+
+Test: `test-ui-host-survival.js` (A–D: Host bleibt aus der ersten Selektion
+heraus und wird nach Erfolg, Ablehnung und Fehler wieder eingehängt; E–I:
+`dropStaleUiRefs` verwirft nur Abgehängtes, `showFloatingIcon` baut ein
+abgehängtes Icon neu). Auf dem alten Code schlägt der Test fehl (die Helfer
+fehlen); der Bug selbst ist mit dem alten `execSetCEText` reproduziert: der Host
+liegt in der ersten Selektion und ist nach dem Write weg.
 
 ## Mehrsprachigkeit (i18n)
 

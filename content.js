@@ -85,6 +85,7 @@
   }
 
   function getUiElementById(id) {
+    dropStaleUiRefs();
     if (!uiRoot) return null;
     try {
       return uiRoot.querySelector('#' + id);
@@ -134,6 +135,76 @@
     try {
       document.querySelectorAll('#llm-assistant-ui-host').forEach((el) => el.remove());
     } catch (e) { /* ignore */ }
+  }
+
+  // Keep the UI host out of a whole-field write. In Thunderbird the compose
+  // body IS document.body and the host is one of its children, so
+  // range.selectNodeContents(body) covers the host and the first insertText
+  // deletes it — the icon, menu and toasts would be gone until the next
+  // injection. Detach the host for the duration of the write and put it back
+  // afterwards (same position). Returns a restore callback or null.
+  function detachUiHostWithin(el) {
+    const host = uiHost;
+    if (!host || !el || host === el || !el.contains(host) || !host.parentNode) {
+      return null;
+    }
+    const parent = host.parentNode;
+    const next = host.nextSibling;
+    try {
+      parent.removeChild(host);
+    } catch (e) {
+      return null;
+    }
+    return function restoreUiHost() {
+      // getUiRoot() may have rebuilt the host in the meantime; then this
+      // detached one is stale and must not be appended next to the fresh one.
+      if (uiHost !== host || host.isConnected) return;
+      try {
+        if (next && next.parentNode === parent) parent.insertBefore(host, next);
+        else parent.appendChild(host);
+      } catch (e) { /* ignore */ }
+    };
+  }
+
+  // Cached UI elements live in the shadow root of uiHost. If the host leaves
+  // the document without suspendUi() — a whole-field write selected it, undo
+  // restored a captured innerHTML, a reopened draft — every cached reference
+  // points into a detached tree. showFloatingIcon would then "show" an orphan
+  // icon and the action menu would never be rebuilt: the add-in looks dead.
+  // Drop stale references so the next show call rebuilds the UI in a fresh
+  // host.
+  function dropStaleUiRefs() {
+    let dropped = false;
+    if (uiHost && !uiHost.isConnected) {
+      uiHost = null;
+      uiRoot = null;
+      dropped = true;
+    }
+    const isStale = (node) => !!node && !node.isConnected;
+    if (isStale(floatingIcon)) { floatingIcon = null; dropped = true; }
+    if (isStale(actionMenu)) { actionMenu = null; dropped = true; }
+    if (isStale(chatWindow)) {
+      chatWindow = null;
+      chatStreamingBubble = null;
+      chatStreamingText = "";
+      chatSendBtn = null;
+      chatInputField = null;
+      dropped = true;
+    }
+    if (isStale(diffOverlay)) {
+      diffOverlay = null;
+      pendingConfirm = null;
+      dropped = true;
+    }
+    if (isStale(undoToast)) {
+      undoToast = null;
+      if (undoToastTimer) {
+        clearTimeout(undoToastTimer);
+        undoToastTimer = null;
+      }
+      dropped = true;
+    }
+    return dropped;
   }
 
   // Drag state for floating icon
@@ -543,6 +614,9 @@
   function showFloatingIcon() {
     if (uiSuspended) return;
     if (!activeInputElement) return;
+    // Rebuild after a host loss (whole-field write, undo restore, …): the
+    // cached icon would point into a detached shadow root and never show.
+    dropStaleUiRefs();
 
     // Don't show for hidden or very small elements
     const rect = activeInputElement.getBoundingClientRect();
@@ -727,6 +801,7 @@
   }
 
   function toggleActionMenu() {
+    dropStaleUiRefs();
     if (actionMenu && actionMenu.style.display !== 'none') {
       hideActionMenu();
       return;
@@ -735,6 +810,7 @@
   }
 
   function showActionMenu() {
+    dropStaleUiRefs();
     if (!floatingIcon) return;
 
     if (!actionMenu) {
@@ -1228,26 +1304,34 @@
   function execSetCEText(el, text) {
     const normalize = (s) =>
       String(s).replace(/\r/g, "").replace(/^\n+|\n+$/g, "");
-    // Whole field: select everything, then insert over it.
-    const all = document.createRange();
-    all.selectNodeContents(el);
-    if (execInsertTextCE(el, all, text)) {
-      if (normalize(getElementFullText(el)) === normalize(text)) return true;
-      // The engine inserted without replacing: clear the field through the
-      // pipeline, then insert the text once at the empty caret.
-      if (!execDeleteCEContents(el)) return false;
-      const emptyRange = document.createRange();
-      emptyRange.selectNodeContents(el);
-      emptyRange.collapse(true);
-      if (execInsertTextCE(el, emptyRange, text) &&
-          normalize(getElementFullText(el)) === normalize(text)) {
-        return true;
+    // Thunderbird: the UI host is a child of the compose body, so the
+    // select-all range below would include it and the write would delete the
+    // icon for good. Keep the host out of the range for the whole write.
+    const restoreUiHost = detachUiHostWithin(el);
+    try {
+      // Whole field: select everything, then insert over it.
+      const all = document.createRange();
+      all.selectNodeContents(el);
+      if (execInsertTextCE(el, all, text)) {
+        if (normalize(getElementFullText(el)) === normalize(text)) return true;
+        // The engine inserted without replacing: clear the field through the
+        // pipeline, then insert the text once at the empty caret.
+        if (!execDeleteCEContents(el)) return false;
+        const emptyRange = document.createRange();
+        emptyRange.selectNodeContents(el);
+        emptyRange.collapse(true);
+        if (execInsertTextCE(el, emptyRange, text) &&
+            normalize(getElementFullText(el)) === normalize(text)) {
+          return true;
+        }
       }
-    }
 
-    // Some editors reject full-select inserts; try replacing only the
-    // current caret line contents, else give up and let the caller know.
-    return false;
+      // Some editors reject full-select inserts; try replacing only the
+      // current caret line contents, else give up and let the caller know.
+      return false;
+    } finally {
+      if (restoreUiHost) restoreUiHost();
+    }
   }
 
   // Select the whole field content through the editing pipeline and delete it.
@@ -3419,6 +3503,8 @@
   // =====================================================================
 
   function showProcessingIndicator() {
+    dropStaleUiRefs();
+    if (!floatingIcon) showFloatingIcon();
     // Change icon to show loading state — click to cancel
     if (floatingIcon) {
       floatingIcon.innerHTML = '⏳';
@@ -3581,7 +3667,14 @@
       // the pre-replacement text (see below).
       const beforeText = getElementFullText(el);
 
-      el.innerText = newText;
+      // A plain CE body (the element itself is the editable container) can
+      // contain the UI host too; innerText replaces every child.
+      const restoreUiHost = detachUiHostWithin(el);
+      try {
+        el.innerText = newText;
+      } finally {
+        if (restoreUiHost) restoreUiHost();
+      }
 
       // Verify the write stuck: React/Vue editors reconcile the DOM from
       // their model and revert un-modelled mutations asynchronously (at the
@@ -3881,9 +3974,18 @@
         const restoreText = String(state.originalText !== undefined && state.originalText !== null
           ? state.originalText
           : '');
-        const all = document.createRange();
-        all.selectNodeContents(el);
-        if (execInsertTextCE(el, all, restoreText)) {
+        // Same host protection as execSetCEText: the undo write selects the
+        // whole field, which in Thunderbird contains our UI host.
+        const restoreUiHost = detachUiHostWithin(el);
+        let restored = false;
+        try {
+          const all = document.createRange();
+          all.selectNodeContents(el);
+          restored = execInsertTextCE(el, all, restoreText);
+        } finally {
+          if (restoreUiHost) restoreUiHost();
+        }
+        if (restored) {
           el.dispatchEvent(new Event('input', { bubbles: true }));
           el.focus();
           cleanedSelection.delete(el);
