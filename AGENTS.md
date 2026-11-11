@@ -43,6 +43,7 @@ node test-linebreaks.js        # Umbruch (\n) vs. Absatz (\n\n), CRLF, Lese-Seit
 node test-ce-finalize.js       # Marker-/Fragment-Cleanup, Caret, TB-Pipeline-Routing
 node test-exec-set-ce.js       # Ganzfeld-Write-Verifikation (Replace/Stack/Broken-Engine)
 node test-ui-host-survival.js  # UI-Host überlebt Ganzfeld-Write (Thunderbird)
+node test-tb-icon-visibility.js # Icon-Sichtbarkeit im TB-Compose (Blur/Focus)
 node test-free-prompt-route.js # contextMenuProcess-Routing + Focus-Erkennung
 node test-frame-routing.js     # all_frames + frame-sensitiver Message-Routing
 node test-v16-features.js      # diffWords, modelsUrlFromApiUrl, collectPageContext
@@ -534,6 +535,42 @@ heraus und wird nach Erfolg, Ablehnung und Fehler wieder eingehängt; E–I:
 abgehängtes Icon neu). Auf dem alten Code schlägt der Test fehl (die Helfer
 fehlen); der Bug selbst ist mit dem alten `execSetCEText` reproduziert: der Host
 liegt in der ersten Selektion und ist nach dem Write weg.
+
+## v1.7.1 — Icon im Thunderbird-Compose nur während Aktionen sichtbar
+
+**Symptom:** Im Thunderbird-Compose-Fenster war das schwebende Roboter-Icon
+nur während einer laufenden Aktion zu sehen. Danach verschwand es, obwohl der
+Mail-Body weiter fokussiert war. Shortcuts funktionierten.
+
+**Ursache (drei Wege, die das Icon ausblendeten, ohne es wieder zu zeigen):**
+1. `init()` zeigte das Icon für ein bereits fokussiertes Feld bewusst nicht.
+   In Thunderbird hält der Compose-Body den Fokus schon vor der Injection, ein
+   `focusin` folgt oft nie, also erschien das Icon erst, wenn eine Aktion es
+   erzwang.
+2. Der Editor ist ein Subframe des Compose-Fensters. Sobald die Compose-
+   Oberfläche (Betreff, Toolbar) den Fokus übernimmt, feuert `window blur` und
+   blendete das Icon aus. Beim Zurückklicken in den Body feuert kein `focusin`
+   (der Body hat den DOM-Fokus nie verloren), und es gab keinen
+   `window focus`-Handler, der das Icon zurückholt.
+3. Der Mouseleave-Timer des Aktionsmenüs blendete nach 300 ms nicht nur das
+   Menü, sondern auch das Icon aus und löschte `activeInputElement`. Traf der
+   Timer nach dem Finish eines schnellen Laufs ein, verschwand das gerade
+   wieder gezeigte Icon.
+
+**Fix (v1.7.1):**
+- `init()` zeigt das Icon in Thunderbird sofort, wenn bereits ein Feld
+  fokussiert ist (mit einem 250-ms-Retry für ein noch nicht vermessenes
+  Layout).
+- Neuer `window focus`-Handler `handleWindowFocus()` zeigt das Icon wieder,
+  wenn das Frame den Fokus zurückbekommt und das Feld weiterhin das aktive
+  Element ist. `handleWindowBlur()` blendet weiterhin aus, damit nicht zwei
+  Icons (Betreff und Body) gleichzeitig stehen.
+- Der Mouseleave-Timer des Menüs ruft nur noch `hideActionMenu()` auf.
+- `closeChatWindow()` zeigt das Icon nach dem Schließen des Free-Prompt-Chats
+  wieder (vorher blieb es nach dem Öffnen des Chats dauerhaft verborgen).
+
+Test: `test-tb-icon-visibility.js` (Blur/Focus-Handler, Suspend, fehlendes/
+abgehängtes Feld, Verdrahtung in `init`).
 
 ## Mehrsprachigkeit (i18n)
 

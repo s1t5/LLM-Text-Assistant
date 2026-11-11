@@ -157,6 +157,16 @@ Test: `test-custom-action-ids.js` (slices `loadActionsForContent` out of both ba
 
 Test: `test-ui-host-survival.js` (host stays out of the first select-all and is restored after success/rejection; stale icon/menu/chat/diff/toast references are rebuilt).
 
+## 🆕 v1.7.1 — fix: floating icon only visible while an action ran (Thunderbird)
+
+**Symptom:** In the Thunderbird compose window the robot icon appeared only while an action was running. Afterwards it was gone even though the mail body still had focus; shortcuts kept working.
+
+**Cause:** Three paths hid the icon without a path that brought it back: `init()` deliberately did not show the icon for an already focused field (the compose body is focused before injection, so no `focusin` follows), the compose editor is a subframe that fires `window blur` when the compose chrome takes focus but no `focusin` when the body regains focus, and the action menu's mouseleave timer hid the icon and cleared the remembered field 300 ms later.
+
+**Fix:** the icon is shown on init in Thunderbird, re-shown on `window focus` when the field is still active, the menu timer now only hides the menu, and closing the free-prompt chat restores the icon.
+
+Test: `test-tb-icon-visibility.js`.
+
 ## 🔒 Privacy & Security Notes
 
 - **No data collection**: The extension collects nothing. API calls go directly from your browser to the endpoint you configured, there is no intermediate server
