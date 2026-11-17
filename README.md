@@ -177,6 +177,16 @@ Test: `test-tb-icon-visibility.js`.
 
 Test: `test-chat-focus-restore.js` (groups C, R, D, W).
 
+## 🆕 v1.7.3 — fix: caret jumped to the text start after an action (Thunderbird)
+
+**Symptom:** After running an action on the whole mail, the caret sat at the very beginning of the text and could not be moved; typing put it right back there.
+
+**Cause:** the whole-field write goes through the editing pipeline (select-all + `insertText`), which leaves the DOM caret at the **editing-host level**: there is no text node for it to sit in. Since v1.6.9 the add-in's UI host is re-appended as the body's last child, so that position ends up behind the host. Gecko cannot keep a caret behind an empty shadow host and normalizes it to the start of the mail on the next keystroke, while the editor keeps its own internal selection, hence the stuck cursor.
+
+**Fix:** the end anchor now skips the UI host and targets the last **text node** of the real content, and it is repeated once the engine has settled (two animation frames, 250 ms, 600 ms). The deferred pass only runs while the field still owns the focus and still shows the result, and any real user interaction (pointer, key) cancels it.
+
+Test: `test-caret-anchor.js` (groups A and S).
+
 ## 🔒 Privacy & Security Notes
 
 - **No data collection**: The extension collects nothing. API calls go directly from your browser to the endpoint you configured, there is no intermediate server

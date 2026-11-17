@@ -46,6 +46,9 @@
   let uiHost = null;
   let uiRoot = null;
   let uiSuspended = false;
+  // Bumped on any real user interaction (pointer, key). Scheduled caret
+  // fix-ups compare it and step aside when the user acted first.
+  let userInteractToken = 0;
 
   function getUiRoot() {
     if (uiSuspended) return null;
@@ -456,6 +459,11 @@
     // (e.g. Reddit's Lit-based comment composer) and re-scanned the DOM on
     // every mutation (expensive on SPA sites).
     document.addEventListener('focusin', handleFocusIn, true);
+
+    // Real user interaction takes ownership of the caret: scheduled fix-ups
+    // (settleCaretAfterPipelineWrite, restoreEditorFocus) step aside.
+    document.addEventListener('pointerdown', () => { userInteractToken++; }, true);
+    document.addEventListener('keydown', () => { userInteractToken++; }, true);
 
     // Frame focus tracking (all_frames): when focus moves to another frame,
     // this frame never sees a click that would hide the icon — hide it on
@@ -3713,16 +3721,21 @@
   // nodes, and editors that own selection state (framework editors,
   // Thunderbird's HTMLEditor) would reset the caret to the field start on
   // the next keystroke.
+  // The caret goes into the last TEXT node of the real content, never behind
+  // the extension's UI host: in Thunderbird that host is a child of the
+  // compose body, and a caret behind it sits at the editing-host level, where
+  // Gecko cannot keep it and moves it to the start of the mail.
   function anchorCaretAtEnd(el) {
     try {
       const selection = window.getSelection();
       const range = document.createRange();
-      if (el.lastChild) {
-        if (el.lastChild.nodeType === 3) {
-          range.setStart(el.lastChild, el.lastChild.length);
-        } else {
-          range.setStartAfter(el.lastChild);
-        }
+      let last = el.lastChild;
+      while (last && isUiNode(last)) last = last.previousSibling;
+      const textNode = lastTextNodeIn(last);
+      if (textNode) {
+        range.setStart(textNode, textNode.length);
+      } else if (last) {
+        range.setStartAfter(last);
       } else {
         range.setStart(el, 0);
       }
@@ -3730,6 +3743,54 @@
       selection.removeAllRanges();
       selection.addRange(range);
     } catch (e) { /* ignore */ }
+  }
+
+  // The extension's own UI host (a child of the compose body in Thunderbird).
+  function isUiNode(node) {
+    if (!node || node.nodeType !== 1) return false;
+    if (node === uiHost) return true;
+    try {
+      return node.id === 'llm-assistant-ui-host';
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // Deepest last text node of a subtree, skipping the extension UI.
+  function lastTextNodeIn(node) {
+    if (!node) return null;
+    if (node.nodeType === 3) return node;
+    if (node.nodeType !== 1 || isUiNode(node)) return null;
+    for (let child = node.lastChild; child; child = child.previousSibling) {
+      const found = lastTextNodeIn(child);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  // A whole-field pipeline write leaves the DOM caret at the EDITING-HOST
+  // level in Gecko: insertText over a select-all range has no text node to
+  // sit in. With the UI host re-appended as the body's last child (v1.6.9),
+  // that position lands behind the host and Gecko normalizes it to the start
+  // of the mail on the next keystroke — "the caret jumps to the text start
+  // and typing puts it right back". Put it into the last text node of the
+  // result once the engine settled. The fix-up steps aside for any user
+  // interaction and only runs while the field still shows the result.
+  function settleCaretAfterPipelineWrite(el, expectedText) {
+    const token = userInteractToken;
+    const fix = () => {
+      if (token !== userInteractToken) return; // user clicked or typed first
+      if (!isNodeInDocument(el)) return;
+      if (!fieldOwnsFocus(el)) return;
+      if (!readBackMatches(el, expectedText)) return; // write not landed / edited
+      anchorCaretAtEnd(el);
+    };
+    const raf = (typeof requestAnimationFrame === 'function')
+      ? requestAnimationFrame
+      : (cb) => setTimeout(cb, 16);
+    raf(() => raf(() => setTimeout(fix, 0)));
+    setTimeout(fix, 250);
+    setTimeout(fix, 600);
   }
 
   // Whether the node is still connected to the document. document.contains()
@@ -3789,6 +3850,9 @@
       if (isFrameworkManagedCE(el)) {
         if (execSetCEText(el, newText)) {
           el.dispatchEvent(new Event('input', { bubbles: true }));
+          // The pipeline leaves an editing-host-level caret in Gecko; put it
+          // into the result's last text node once the engine settled.
+          settleCaretAfterPipelineWrite(el, newText);
           return;
         }
         console.warn("[LLM Content] Framework editor rejected pipeline write, falling back");
@@ -3828,6 +3892,7 @@
       anchorCaretAtEnd(el);
 
       el.dispatchEvent(new Event('input', { bubbles: true }));
+      settleCaretAfterPipelineWrite(el, newText);
 
       // Delayed verification: React-style reverts happen on the framework's
       // render schedule, after this function returned. If the field then

@@ -50,6 +50,7 @@ node test-v16-features.js      # diffWords, modelsUrlFromApiUrl, collectPageCont
 node test-shortcut-priority.js # document_start-Guard: Shortcut-Priorität, Swallow-Logik, Hook-Vertrag
 node test-confirm-before-replace.js # Confirm-Gate in allen Schreibpfaden (kein Vorab-Schreiben)
 node test-chat-focus-restore.js # Caret nach dem Free-Prompt-Chat (Focus, Shadow-Selection, Nachlauf)
+node test-caret-anchor.js      # Caret-Anker nach Ganzfeld-Write (UI-Host, Textknoten, Nachlauf)
 ```
 
 Die Tests slicen die Funktionen per String-Slicing aus den ausgelieferten Quellen und
@@ -610,6 +611,44 @@ weil der Editor seine eigene Selection asynchron erneut setzt.
 Test: `test-chat-focus-restore.js` (Gruppen C, R, D, W). Rot auf dem alten Code
 bzw. mit deaktiviertem Nachlauf (`R5`) oder deaktiviertem `dropUiSelection`
 (`W4`).
+
+## v1.7.3 — Cursor springt nach einer Aktion an den Textanfang (Thunderbird)
+
+**Symptom:** Nach dem Anwenden einer Aktion auf die gesamte Mail stand der
+Cursor am Textanfang und ließ sich nicht mehr an eine andere Stelle setzen.
+Beim Tippen sprang er sofort wieder an den Anfang.
+
+**Ursache:** Der Ganzfeld-Write läuft in Thunderbird über die Pipeline
+(`selectNodeContents` + `insertText`). Danach steht die DOM-Selection auf
+**Editing-Host-Ebene** (Offset im Body), weil ein `insertText` über eine
+Select-All-Range keinen Textknoten hat, in dem der Caret sitzen könnte. Seit
+v1.6.9 hängt der UI-Host wieder als letztes Body-Kind im Body, der Caret landet
+dadurch **hinter dem Host**. Gecko kann eine Editing-Host-Position hinter einem
+leeren Shadow-Host nicht halten und normalisiert sie beim nächsten Tastendruck
+auf den Textanfang. Der Editor behält intern eine andere Selection, deshalb war
+der sichtbare Cursor am Anfang und ließ sich nicht verschieben.
+
+**Fix (v1.7.3):**
+- `anchorCaretAtEnd()` überspringt den UI-Host und setzt den Caret in den
+  **letzten Textknoten** des echten Inhalts (neue Helfer `isUiNode`,
+  `lastTextNodeIn`), statt hinter das letzte Kind.
+- `settleCaretAfterPipelineWrite(el, expectedText)` wiederholt das nach dem
+  Write, wenn die Engine fertig ist (2×rAF, 250 ms, 600 ms). Der Nachlauf greift
+  nur, solange das Feld noch den Fokus hat und exakt das Ergebnis zeigt; jeder
+  echte Nutzer-Input bricht ihn ab (`userInteractToken`, gepflegt von
+  `pointerdown`/`keydown` in `init()`).
+- Aufruf in beiden Ganzfeld-Zweigen von `replaceFullTextInElement` (Pipeline und
+  Direkt-Write). Der Chat-Apply-Pfad bekommt den Fix automatisch, weil er durch
+  dieselbe Funktion läuft.
+
+**Merkregel:** Ein Caret auf Editing-Host-Ebene ist in Gecko kein gültiger
+Dauerzustand, besonders nicht hinter dem UI-Host im Compose-Body. Nach jedem
+Ganzfeld-Write muss er in einen Textknoten des Ergebnisses, und zwar nach dem
+Settle der Engine.
+
+Test: `test-caret-anchor.js` (A1–A7, S1–S5). Mit der alten `lastChild`-Logik
+wird A3 rot mit `afterNode=llm-assistant-ui-host`, also genau dem Zustand aus
+dem Bugreport.
 
 ## Mehrsprachigkeit (i18n)
 
