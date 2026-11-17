@@ -49,6 +49,7 @@ node test-frame-routing.js     # all_frames + frame-sensitiver Message-Routing
 node test-v16-features.js      # diffWords, modelsUrlFromApiUrl, collectPageContext
 node test-shortcut-priority.js # document_start-Guard: Shortcut-Priorität, Swallow-Logik, Hook-Vertrag
 node test-confirm-before-replace.js # Confirm-Gate in allen Schreibpfaden (kein Vorab-Schreiben)
+node test-chat-focus-restore.js # Caret nach dem Free-Prompt-Chat (Focus, Shadow-Selection, Nachlauf)
 ```
 
 Die Tests slicen die Funktionen per String-Slicing aus den ausgelieferten Quellen und
@@ -571,6 +572,44 @@ Mail-Body weiter fokussiert war. Shortcuts funktionierten.
 
 Test: `test-tb-icon-visibility.js` (Blur/Focus-Handler, Suspend, fehlendes/
 abgehängtes Feld, Verdrahtung in `init`).
+
+## v1.7.2 — Cursor nach dem Kopieren einer Chat-Antwort unsichtbar (Thunderbird)
+
+**Symptom:** Nach dem Öffnen des Free-Prompt-Chats, dem Kopieren einer Antwort
+und dem Schließen des Fensters war im Mail-Body kein Cursor mehr zu sehen.
+Tippen funktionierte weiter, es gab nur keine sichtbare Schreibmarke.
+
+**Ursache (zwei Mechanismen, beide Gecko-spezifisch):**
+1. Wer eine Antwort im Chat markiert, legt die Dokument-Selection in den Shadow
+   Root des Overlays. `closeChatWindow()` entfernte diesen Teilbaum, während die
+   Selection noch darin verankert war. Danach zeigt die Selection auf einen
+   abgehängten Knoten, und Gecko malt dafür keinen Cursor.
+2. Das Entfernen des Overlays ist eine DOM-Mutation im editierbaren Body.
+   Thunderbirds Editor setzt seine eigene Selection asynchron danach wieder
+   durch (dieselbe Verhaltensklasse wie bei `execCommand`). Die synchrone
+   Wiederherstellung aus v1.6.6 wurde damit überschrieben. Den internen Caret
+   behält der Editor, deshalb funktioniert Tippen weiter.
+
+**Fix (v1.7.2):**
+- `dropUiSelection()` löscht eine Selection, die im eigenen UI verankert ist
+  (Shadow Root oder retargetet auf den Host), **bevor** das Overlay entfernt
+  wird. Eine Selection außerhalb des UI bleibt unangetastet.
+- `restoreEditorFocus()` setzt den Caret wie bisher und wiederholt das einmal
+  asynchron (zwei `requestAnimationFrame` plus 200 ms). Der Nachlauf greift nur,
+  wenn das Feld noch den Fokus hat und die Selection nicht schon im Feld liegt;
+  ein Klick oder Tastendruck des Nutzers gewinnt damit immer.
+- Der Apply-Pfad ruft `closeChatWindow({ reassert: false })`: dort hat der Write
+  den Caret bereits gesetzt, und die gestaffelte Framework-Kette darf nicht
+  durch eine späte Selection-Änderung gestört werden.
+
+**Merkregel:** Jede UI, die im editierbaren Bereich liegt, muss ihre Selection
+zurückgeben, bevor sie sich selbst aus dem DOM nimmt. Und eine
+Selection-Wiederherstellung gegen einen Gecko-Editor braucht einen Nachlauf,
+weil der Editor seine eigene Selection asynchron erneut setzt.
+
+Test: `test-chat-focus-restore.js` (Gruppen C, R, D, W). Rot auf dem alten Code
+bzw. mit deaktiviertem Nachlauf (`R5`) oder deaktiviertem `dropUiSelection`
+(`W4`).
 
 ## Mehrsprachigkeit (i18n)
 

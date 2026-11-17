@@ -167,6 +167,16 @@ Test: `test-ui-host-survival.js` (host stays out of the first select-all and is 
 
 Test: `test-tb-icon-visibility.js`.
 
+## 🆕 v1.7.2 — fix: invisible caret after copying a chat answer (Thunderbird)
+
+**Symptom:** In Thunderbird, opening the free-prompt chat, copying an answer and closing the window left the mail body without a visible caret. Typing still worked, there was just no blinking cursor.
+
+**Cause:** two Gecko-specific mechanisms. Selecting an answer puts the document selection into the chat's shadow root, and the overlay was removed while the selection was still anchored in that subtree, so the selection ended up on a detached node that paints no caret. On top of that, removing the overlay is a DOM mutation inside the editable body, and Thunderbird's editor re-asserts its own selection asynchronously afterwards (the same behaviour class as its `execCommand` handling), overwriting the synchronous restore. The editor keeps its internal caret, which is why typing still worked.
+
+**Fix:** a selection parked in the add-in's own UI is cleared before the overlay is removed (a selection outside the UI is left alone), and the caret restore is repeated once after the editor had its turn (two animation frames plus 200 ms). The repeat only runs while the field still owns the focus and the selection is not already inside the field, so a click or keystroke in the meantime always wins. The apply path opts out of the repeat because the write already anchored the caret and its staged framework chain must not be disturbed.
+
+Test: `test-chat-focus-restore.js` (groups C, R, D, W).
+
 ## 🔒 Privacy & Security Notes
 
 - **No data collection**: The extension collects nothing. API calls go directly from your browser to the endpoint you configured, there is no intermediate server

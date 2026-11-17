@@ -3497,8 +3497,10 @@
       lastProcessedElement = null;
       pendingElement = null;
 
-      // Close chat window
-      closeChatWindow();
+      // Close chat window. No delayed caret re-assert here: the write above
+      // already anchored the caret and its staged framework chain may still
+      // be running.
+      closeChatWindow({ reassert: false });
 
       // Show icon again
       showFloatingIcon();
@@ -3514,7 +3516,25 @@
     doApply();
   }
 
-  function closeChatWindow() {
+  // Clear a selection that sits inside the extension's own UI (the user
+  // selected a chat answer to copy it). Removing the overlay while the
+  // selection is anchored in its shadow tree leaves the document with a
+  // selection on a detached node: no caret is painted in the mail, yet the
+  // editor keeps inserting at its own caret — the "invisible cursor" report.
+  function dropUiSelection() {
+    try {
+      const selection = window.getSelection();
+      if (!selection || selection.rangeCount === 0) return;
+      const node = selection.anchorNode;
+      if (!node) return;
+      const host = uiHost;
+      const inUi = (host && (host === node || host.contains(node))) ||
+        (node.getRootNode && uiRoot && node.getRootNode() === uiRoot);
+      if (inUi) selection.removeAllRanges();
+    } catch (e) { /* ignore */ }
+  }
+
+  function closeChatWindow(opts) {
     if (currentRequestId !== null) {
       cancelCurrentRequest();
     }
@@ -3524,6 +3544,9 @@
     const focusTarget = pendingElement || activeInputElement;
     const caretRange = pendingCaretRange;
     pendingCaretRange = null;
+    // Take the selection out of the chat's shadow tree before that subtree
+    // is removed (see dropUiSelection).
+    dropUiSelection();
     if (chatWindow) {
       chatWindow.remove();
       chatWindow = null;
@@ -3533,7 +3556,7 @@
       chatSendBtn = null;
       chatInputField = null;
     }
-    restoreEditorFocus(focusTarget, caretRange);
+    restoreEditorFocus(focusTarget, caretRange, opts);
     // The chat hid the icon when it opened; bring it back now that the editor
     // owns the focus again (cancel path; applyLastResult shows it as well).
     if (focusTarget && isNodeInDocument(focusTarget)) {
@@ -3598,7 +3621,7 @@
   // and could not be typed into until the user clicked it again. A range that
   // went stale in the meantime (e.g. the field was rewritten by "apply")
   // falls back to the end of the field.
-  function restoreEditorFocus(el, range) {
+  function restoreEditorFocus(el, range, opts) {
     if (!el || !isNodeInDocument(el)) return;
     try {
       el.focus({ preventScroll: true });
@@ -3609,16 +3632,80 @@
       return; // focus() restores the element's own selection state
     }
     if (!el.isContentEditable) return;
+
+    const applyCaret = () => {
+      try {
+        const selection = window.getSelection();
+        if (range && isNodeInDocument(range.startContainer) &&
+            (el === range.startContainer || el.contains(range.commonAncestorContainer))) {
+          selection.removeAllRanges();
+          selection.addRange(range);
+          return;
+        }
+      } catch (e) { /* fall through to the end anchor */ }
+      anchorCaretAtEnd(el);
+    };
+
+    applyCaret();
+
+    // Callers that just rewrote the field ("apply") already anchored the
+    // caret themselves, and the staged framework write may still be running.
+    // A delayed selection change would land in the middle of that chain.
+    if (opts && opts.reassert === false) return;
+
+    // Gecko editors re-assert their own selection after the DOM around them
+    // changed, and they do it asynchronously (same behaviour class as their
+    // execCommand handling, see scheduleFrameworkPasteWrite). Removing the
+    // chat overlay is such a change — it is a child of the compose body — so
+    // the caret restored above can be overwritten a moment later and end up
+    // on a node that is no longer part of the mail. The caret is then
+    // invisible although typing still works (the editor keeps its own).
+    // Re-assert once after the editor had its turn. Guarded so it never
+    // fights the user: only while the field still owns the focus and only
+    // while the selection is not already inside the field (a click or a
+    // keystroke in the meantime puts it there and wins).
+    const reassert = () => {
+      if (!isNodeInDocument(el)) return;
+      if (!fieldOwnsFocus(el)) return;
+      if (selectionLivesIn(el)) return;
+      applyCaret();
+    };
+    const raf = (typeof requestAnimationFrame === 'function')
+      ? requestAnimationFrame
+      : (cb) => setTimeout(cb, 16);
+    raf(() => raf(() => setTimeout(reassert, 0)));
+    setTimeout(reassert, 200);
+  }
+
+  // Whether the live selection is anchored inside `el`. A selection parked in
+  // the extension's shadow root (text the user selected in the chat to copy
+  // it) is NOT inside the field: the host div is a child of the compose body,
+  // but shadow content is a separate tree.
+  function selectionLivesIn(el) {
     try {
       const selection = window.getSelection();
-      if (range && isNodeInDocument(range.startContainer) &&
-          (el === range.startContainer || el.contains(range.commonAncestorContainer))) {
-        selection.removeAllRanges();
-        selection.addRange(range);
-        return;
-      }
-    } catch (e) { /* ignore */ }
-    anchorCaretAtEnd(el);
+      if (!selection || selection.rangeCount === 0) return false;
+      const node = selection.anchorNode;
+      return !!(node && (node === el || el.contains(node)));
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // Whether `el` (or something inside it) is the focused element. In
+  // Thunderbird the compose body IS document.body, so a caret in the editor
+  // leaves activeElement on the body even while the user works elsewhere in
+  // the compose chrome.
+  function fieldOwnsFocus(el) {
+    try {
+      const active = document.activeElement;
+      if (!active) return false;
+      if (active === el || el.contains(active)) return true;
+      return active === document.body &&
+        (el === document.body || document.body.contains(el));
+    } catch (e) {
+      return false;
+    }
   }
 
   // Anchor the live DOM selection at the end of el's content. Used after raw
