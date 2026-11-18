@@ -316,10 +316,13 @@ function runDrop(opts) {
 }
 
 // --- W: closeChatWindow wiring ---------------------------------------------
-function makeClose() {
+function makeClose(opts) {
+  opts = opts || {};
   const seen = [];
   const events = [];
-  const factory = new Function('restoreEditorFocus', 'isNodeInDocument', 'showFloatingIcon', 'dropUiSelection', 'logCaretState', `
+  const moves = [];
+  const factory = new Function('restoreEditorFocus', 'isNodeInDocument', 'showFloatingIcon', 'dropUiSelection', 'logCaretState',
+    'uiFocusIsInside', 'moveFocusOutOfUi', `
     let currentRequestId = null;
     let cancelCurrentRequest = () => {};
     let chatWindow = null, chatMessages = [], chatStreamingBubble = null, chatStreamingText = "";
@@ -343,10 +346,13 @@ function makeClose() {
     () => true,
     () => {},
     () => events.push('drop'),
-    () => {}
+    () => {},
+    () => opts.focusInUi !== false,
+    (el, range) => { moves.push({ el, range }); events.push('move'); }
   );
   api.seen = seen;
   api.events = events;
+  api.moves = moves;
   return api;
 }
 
@@ -369,8 +375,81 @@ function makeClose() {
   check('W2 chat window torn down',
     removed === true && st.chatWindow === null && st.chatMessages.length === 0);
   check('W3 pending range cleared after use', st.pendingCaretRange === null);
-  check('W4 UI selection is dropped before the overlay is removed',
-    api.events.join(',') === 'drop,remove', api.events.join(','));
+  check('W4 UI selection dropped, then focus moved out, then overlay removed',
+    api.events.join(',') === 'drop,move,remove', api.events.join(','));
+  check('W7 focus is moved to the field with the remembered range while the input still exists',
+    api.moves.length === 1 && api.moves[0].el === field && api.moves[0].range === range,
+    JSON.stringify(api.moves.map(m => ({ el: m.el && m.el.id, range: m.range && m.range.id }))));
+}
+
+{
+  const api = makeClose({ focusInUi: false });
+  api.set({ pendingElement: { id: 'f' }, chatWindow: { remove() { api.events.push('remove'); } } });
+  api.close();
+  check('W8 focus outside the UI is left alone',
+    api.moves.length === 0 && api.events.join(',') === 'drop,remove', api.events.join(','));
+}
+
+{
+  const api = makeClose();
+  api.set({ pendingElement: { id: 'f' }, pendingCaretRange: { id: 'stale' }, chatWindow: { remove() {} } });
+  api.close({ reassert: false });
+  check('W9 apply path moves focus without the stale open-time range',
+    api.moves.length === 1 && api.moves[0].range === null,
+    JSON.stringify(api.moves));
+}
+
+// --- M: moveFocusOutOfUi ----------------------------------------------------
+// The real bug: removing the FOCUSED chat input lets Gecko drop the focus
+// without a focus event for the editor -> no caret painted. The focus must
+// leave the UI while the input still exists.
+function runMove(opts) {
+  const log = [];
+  const uiHost = { id: 'host', blur() { log.push('host.blur'); } };
+  const inner = { blur() { log.push('inner.blur'); state.innerActive = false; } };
+  const state = { innerActive: true };
+  const textNode = { nodeType: 3 };
+  const field = {
+    isContentEditable: true,
+    contains: (n) => n === textNode,
+    focus() { log.push('field.focus'); if (opts.focusWorks) state.innerActive = false; }
+  };
+  const uiRoot = { get activeElement() { return state.innerActive ? inner : null; } };
+  const doc = { get activeElement() { return state.innerActive ? uiHost : field; } };
+  const sel = {
+    removeAllRanges() { log.push('sel.clear'); },
+    addRange() { log.push('sel.add'); }
+  };
+  const fn = new Function('window', 'document', 'isNodeInDocument', 'uiHost', 'uiRoot', `
+    ${extractFn('uiFocusIsInside')}
+    ${extractFn('moveFocusOutOfUi')}
+    return { moveFocusOutOfUi, uiFocusIsInside };
+  `)({ getSelection: () => sel }, doc, () => true, uiHost, uiRoot);
+  const before = fn.uiFocusIsInside();
+  fn.moveFocusOutOfUi(field, opts.range === undefined
+    ? { startContainer: textNode, commonAncestorContainer: textNode } : opts.range);
+  return { log, before, after: fn.uiFocusIsInside() };
+}
+
+{
+  const r = runMove({ focusWorks: true });
+  check('M1 focus inside the UI is detected', r.before === true);
+  check('M2 selection placed in the field BEFORE focusing it',
+    r.log.slice(0, 3).join(',') === 'sel.clear,sel.add,field.focus', r.log.join(','));
+  check('M3 focusable field: no blur needed, focus left the UI',
+    r.after === false && !r.log.includes('inner.blur'), r.log.join(','));
+}
+
+{
+  // designMode (Thunderbird): body.focus() does not take the focus away.
+  const r = runMove({ focusWorks: false });
+  check('M4 field.focus() a no-op -> inner UI element is blurred',
+    r.log.includes('inner.blur') && r.after === false, r.log.join(','));
+}
+
+{
+  const r = runMove({ focusWorks: true, range: null });
+  check('M5 no range -> selection untouched', !r.log.includes('sel.add'), r.log.join(','));
 }
 
 {

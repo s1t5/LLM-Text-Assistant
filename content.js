@@ -3551,6 +3551,55 @@
     } catch (e) { /* ignore */ }
   }
 
+  // Whether the focus currently sits inside the extension's own UI (closed
+  // shadow root: document.activeElement is retargeted to the host).
+  function uiFocusIsInside() {
+    try {
+      if (!uiHost) return false;
+      const active = document.activeElement;
+      if (active === uiHost) return true;
+      return !!(uiRoot && uiRoot.activeElement);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // Move the focus out of our UI while the focused UI element still exists.
+  // First try the field itself (contenteditable: a real focus change from the
+  // chat input to the editor). In a designMode document (Thunderbird compose)
+  // the body cannot take element focus, so focus() can be a no-op — then
+  // blur the inner element: Gecko clears the focus to the document and fires
+  // the document-level focus that the HTMLEditor listens for, which turns its
+  // caret back on.
+  function moveFocusOutOfUi(target, range) {
+    // Put the selection into the field first: focusing a contenteditable
+    // whose selection lies elsewhere makes Gecko collapse the caret to the
+    // start of the field.
+    try {
+      if (range && target && target.isContentEditable &&
+          isNodeInDocument(range.startContainer) &&
+          (target === range.startContainer || target.contains(range.commonAncestorContainer))) {
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+    } catch (e) { /* ignore */ }
+    const focusTarget = () => {
+      try {
+        if (target && isNodeInDocument(target)) {
+          try { target.focus({ preventScroll: true }); } catch (e) { target.focus(); }
+        }
+      } catch (e) { /* ignore */ }
+    };
+    focusTarget();
+    try {
+      if (!uiFocusIsInside()) return;
+      const inner = uiRoot && uiRoot.activeElement;
+      if (inner && typeof inner.blur === 'function') inner.blur();
+      else if (document.activeElement === uiHost && typeof uiHost.blur === 'function') uiHost.blur();
+    } catch (e) { /* ignore */ }
+  }
+
   function closeChatWindow(opts) {
     if (currentRequestId !== null) {
       cancelCurrentRequest();
@@ -3564,6 +3613,18 @@
     // Take the selection out of the chat's shadow tree before that subtree
     // is removed (see dropUiSelection).
     dropUiSelection();
+    // Hand the focus back BEFORE the overlay leaves the DOM. Removing the
+    // focused chat input makes Gecko finalize the editor's selection and
+    // switch its caret off (nsFocusManager::ContentRemoved) without sending
+    // the editor a focus event; a later focus() on the already active body is
+    // a no-op, so the caret stays unpainted although typing works. Moving the
+    // focus while the input still exists is a real focus change the editor
+    // sees.
+    const focusWasInUi = uiFocusIsInside();
+    // Apply path (reassert:false): the write already placed the caret, the
+    // range captured at open time is stale — only move the focus.
+    const applyPath = !!(opts && opts.reassert === false);
+    if (focusWasInUi) moveFocusOutOfUi(focusTarget, applyPath ? null : caretRange);
     logCaretState('close:before-restore', focusTarget);
     if (chatWindow) {
       chatWindow.remove();
