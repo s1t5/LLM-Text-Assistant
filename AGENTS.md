@@ -1,7 +1,7 @@
 # AGENTS.md
 
 Dieser Ordner enthält die **LLM Text Assistent** Browser-Erweiterung (Manifest V3).
-Repo: `github.com/s1t5/LLM-Text-Assistant` (Push-Mirror auf `github.com/s1t5/LLM-Text-Assistant`).
+Repo: `github.com/s1t5/LLM-Text-Assistant` (öffentlicher Spiegel des Ursprungs-Repos).
 
 ## Projektstruktur (Trunk + Plattform-Overlays, seit v1.5.12)
 
@@ -760,12 +760,12 @@ Kanonische Form: `[Ctrl+][Alt+][Shift+][Meta+]<Key>`
 **Manuell wird nur die Version erhöht — alles andere macht die GitHub Action.**
 
 1. Version **nur** im Root-`manifest.json` erhöhen (die Overlay-Manifeste tragen keine Version; der Build injiziert sie).
-2. Commit, Tag in Gitea erstellen, dann Branch **und** Tag in EINEM Befehl pushen:
+2. Commit, Tag erstellen, dann Branch **und** Tag in EINEM Befehl pushen:
    ```bash
    git tag <version>
    git push origin main refs/tags/<version>
    ```
-   Der Tag **muss** Gitea-seitig entstehen — der Push-Mirror löscht GitHub-only-Tags (siehe Spiegel-Hinweis).
+   Der Tag **muss** auf dem Ursprungs-Remote entstehen, der Push-Mirror löscht GitHub-only-Tags (siehe Spiegel-Hinweis).
 3. Die GitHub Action (`.github/workflows/release.yml`, läuft auf dem GitHub-Spiegel) übernimmt:
    - `test`-Job: alle `test-*.js` (bei jedem Push)
    - `release`-Job: Build via `tools/build.mjs`, Paket-Verifikation, `gh release create` am gespiegelten Tag, veröffentlicht (kein Draft). Wird übersprungen, wenn für die Version schon ein Release existiert.
