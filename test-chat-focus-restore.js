@@ -131,8 +131,10 @@ function runRestore(opts) {
   };
   const doc = {
     activeElement: opts.activeElement === undefined ? el : opts.activeElement,
-    body: opts.body || el
+    body: opts.body || el,
+    hasFocus() { return opts.hasFocus !== false; }
   };
+  let windowFocus = 0;
   if (!opts.noCreateElement) {
     doc.createElement = () => ({
       setAttribute() {},
@@ -146,13 +148,17 @@ function runRestore(opts) {
   const factory = new Function(
     'window', 'document', 'isNodeInDocument', 'anchorCaretAtEnd', 'logCaretState',
     'requestAnimationFrame', 'setTimeout', `
+    let userInteractToken = 0;
     ${extractFn('caretIsUsable')}
     ${extractFn('fieldOwnsFocus')}
     ${extractFn('restoreEditorFocus')}
-    return { restoreEditorFocus, caretIsUsable, fieldOwnsFocus };
+    return {
+      restoreEditorFocus, caretIsUsable, fieldOwnsFocus,
+      bumpUser() { userInteractToken++; }
+    };
   `);
   const api = factory(
-    { getSelection: () => selection },
+    { getSelection: () => selection, focus() { windowFocus++; } },
     doc,
     (n) => !!(n && n.isConnected),
     () => { calls.anchored++; selState.anchorNode = el; selState.ranges = [{ startContainer: el }]; },
@@ -176,7 +182,10 @@ function runRestore(opts) {
     }
   };
 
-  return { calls, selState, node, detached, el, doc, timers, runTimers, api };
+  return {
+    calls, selState, node, detached, el, doc, timers, runTimers, api,
+    get windowFocus() { return windowFocus; }
+  };
 }
 
 {
@@ -209,17 +218,27 @@ function runRestore(opts) {
   r.selState.ranges = [{ startContainer: r.detached }];
   r.runTimers();
   check('R5 async re-assert restores a caret the editor moved out',
-    r.calls.addRange === 2 && r.selState.anchorNode === r.node,
+    r.calls.addRange >= 2 && r.selState.anchorNode === r.node,
     'addRange=' + r.calls.addRange + ' anchor=' + (r.selState.anchorNode && r.selState.anchorNode.nodeName));
 
-  // A caret that is already inside the field wins — a click or keystroke in
-  // the meantime must never be undone.
+  // Every pass re-applies, even when the caret looks usable: the engine's own
+  // re-assert can land at any moment inside the window (this is the late
+  // clobber the loop exists for, and stopping at the first "ok" missed it).
   const keep = runRestore({});
   keep.selState.anchorNode = keep.node;
   keep.selState.ranges = [{ startContainer: keep.node }];
   keep.runTimers();
-  check('R6 re-assert never fights a caret that is already in the field',
-    keep.calls.addRange === 1, 'addRange=' + keep.calls.addRange);
+  check('R6 every pass re-applies the caret (late clobber wins nothing)',
+    keep.calls.addRange === 4, 'addRange=' + keep.calls.addRange);
+
+  // ...but a real user interaction stops the loop immediately.
+  const touched = runRestore({});
+  touched.selState.anchorNode = touched.detached;
+  touched.selState.ranges = [{ startContainer: touched.detached }];
+  touched.api.bumpUser();
+  touched.runTimers();
+  check('R6b user interaction cancels the re-assert loop',
+    touched.calls.addRange === 1, 'addRange=' + touched.calls.addRange);
 
   // Focus moved on (e.g. the user clicked the subject line): leave it alone.
   const moved = runRestore({});
@@ -244,7 +263,7 @@ function runRestore(opts) {
   hostLevel.selState.ranges = [{ startContainer: hostLevel.el }];
   hostLevel.runTimers();
   check('R9 an editing-host-level caret is re-anchored',
-    hostLevel.calls.addRange === 2 && hostLevel.selState.anchorNode === hostLevel.node,
+    hostLevel.calls.addRange >= 2 && hostLevel.selState.anchorNode === hostLevel.node,
     'addRange=' + hostLevel.calls.addRange);
 
   // If re-anchoring still leaves an unusable caret (stale range -> end
@@ -254,7 +273,7 @@ function runRestore(opts) {
   });
   cycle.runTimers();
   check('R10 second pass forces a focus cycle through the offscreen sink',
-    cycle.calls.sinkFocus >= 1 && cycle.calls.sinkRemoved >= 1 && cycle.calls.anchored >= 3,
+    cycle.calls.sinkFocus >= 1 && cycle.calls.sinkRemoved >= 1 && cycle.calls.anchored === 4,
     'sinkFocus=' + cycle.calls.sinkFocus + ' anchored=' + cycle.calls.anchored);
 
   // No createElement available (or it throws): the blur() fallback must run.
@@ -264,8 +283,20 @@ function runRestore(opts) {
   });
   fallback.runTimers();
   check('R11 focus cycle falls back to blur() without createElement',
-    fallback.calls.blur >= 1 && fallback.calls.anchored >= 3,
+    fallback.calls.blur >= 1 && fallback.calls.anchored === 4,
     'blur=' + fallback.calls.blur + ' anchored=' + fallback.calls.anchored);
+
+  // An unfocused document paints no caret at all (Gecko's caret needs the
+  // document focus). The restore must ask the window for it back.
+  const unfocused = runRestore({ hasFocus: false });
+  unfocused.runTimers();
+  check('R12 an unfocused document gets window.focus()',
+    unfocused.windowFocus >= 1, 'windowFocus=' + unfocused.windowFocus);
+
+  const focused = runRestore({});
+  focused.runTimers();
+  check('R13 a focused document is left alone',
+    focused.windowFocus === 0, 'windowFocus=' + focused.windowFocus);
 }
 
 // --- D: dropUiSelection -----------------------------------------------------

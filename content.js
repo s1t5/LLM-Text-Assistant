@@ -3739,6 +3739,13 @@
     // first. The sink lives outside <body> because in Thunderbird the compose
     // body IS the editable content.
     const focusField = (forceCycle) => {
+      // A document that lost the focus paints no caret at all. Re-focusing an
+      // element inside it does not bring the document focus back, so ask for it
+      // explicitly (harmless no-op where the window cannot grant it).
+      try { if (!document.hasFocus()) window.focus(); } catch (e) { /* ignore */ }
+      const designMode = (() => {
+        try { return !!document.designMode && document.designMode !== 'off'; } catch (e) { return false; }
+      })();
       if (forceCycle && document.activeElement === el &&
           typeof document.createElement === 'function') {
         let sink = null;
@@ -3749,7 +3756,11 @@
           const root = document.documentElement || document.body;
           root.appendChild(sink);
           sink.focus({ preventScroll: true });
-          el.focus({ preventScroll: true });
+          // In a designMode document (Thunderbird compose) the body cannot take
+          // element focus. There the removal of the focused sink in `finally`
+          // is what helps: the focus manager falls back to the document and
+          // fires the focus event the editor listens for.
+          if (!designMode) el.focus({ preventScroll: true });
           return;
         } catch (e) {
           /* fall back to blur() below */
@@ -3801,20 +3812,37 @@
     // the editing-host level where Gecko cannot keep it. The caret is then
     // invisible although typing still works (the editor keeps its own).
     // Re-assert a few times after the editor had its turn. Guarded so it never
-    // fights the user: only while the field still owns the focus and only
-    // while the caret is not already usable inside the field (a click or a
-    // keystroke in the meantime puts it there and wins).
+    // fights the user: only while the field still owns the focus and only as
+    // long as the user did not touch the field in the meantime (a click or a
+    // keystroke bumps userInteractToken and wins).
     let pass = 0;
+    const tokenAtSchedule = userInteractToken;
     const reassert = () => {
       pass++;
       if (!isNodeInDocument(el)) return logCaretState('reassert#' + pass + ':detached', el);
       if (!fieldOwnsFocus(el)) return logCaretState('reassert#' + pass + ':focus-elsewhere', el);
-      if (caretIsUsable(el)) return logCaretState('reassert#' + pass + ':ok', el);
-      // Second pass: wake the editor with a real focus cycle before setting
-      // the selection again (see focusField above).
-      if (pass >= 2) focusField(true);
+      if (userInteractToken !== tokenAtSchedule) return logCaretState('reassert#' + pass + ':user', el);
+      // A document that lost the focus paints NO caret, whatever the selection
+      // says (nsCaret::ComputeVisibility needs a focused document). The removed
+      // chat input was the focused element, so removing it can leave the
+      // compose document unfocused; a selection restore alone then changes
+      // nothing visible. Ask the window for the focus back.
+      let focused = true;
+      try { focused = document.hasFocus(); } catch (e) { /* assume focused */ }
+      if (!focused) {
+        try { window.focus(); } catch (e) { /* ignore */ }
+        try { focused = document.hasFocus(); } catch (e) { /* ignore */ }
+      }
+      const usableBefore = caretIsUsable(el);
+      // Always re-apply, even when the caret already looks usable: the engine
+      // re-asserts its own selection asynchronously and can clobber it at any
+      // point inside the window. Re-applying the same range is idempotent.
+      // Stopping at the first usable caret is exactly what missed the late
+      // clobber this loop exists for.
+      if (pass === 2) focusField(true);
       applyCaret();
-      logCaretState('reassert#' + pass + ':fixed', el);
+      logCaretState('reassert#' + pass + (usableBefore ? ':was-usable' : ':was-broken') +
+        (focused ? '' : '-nofocus'), el);
     };
     const raf = (typeof requestAnimationFrame === 'function')
       ? requestAnimationFrame

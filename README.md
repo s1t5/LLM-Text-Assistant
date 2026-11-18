@@ -197,6 +197,14 @@ Test: `test-caret-anchor.js` (groups A and S).
 
 Test: `test-chat-focus-restore.js` (C5/C6, R9/R10 new).
 
+## 🆕 v1.7.6 — fix: the caret is missing only when the chat is closed with ✕
+
+**New observation:** applying an answer leaves a working caret, closing the window with ✕ does not. That contrast is the diagnostic: applying the answer writes the text and focuses the field on the way, so the focus already sits in the body **before** the overlay is removed. With ✕ the chat input is still the focused element when the overlay leaves the DOM.
+
+**Two gaps fixed:** the re-assert loop used to stop at the first pass where the caret merely *looked* usable, while the editor re-establishes its own state asynchronously and later, so every pass now re-applies the caret (idempotent) until the user interacts; and the restore now calls `window.focus()` when `document.hasFocus()` is false, because Gecko paints no caret at all in an unfocused document. In `designMode` documents (Thunderbird compose) the offscreen focus sink is only removed, without a `body.focus()` in between, which is a no-op there.
+
+Test: `test-chat-focus-restore.js` (R6/R6b, R10–R13 new).
+
 ## 🔒 Privacy & Security Notes
 
 - **No data collection**: The extension collects nothing. API calls go directly from your browser to the endpoint you configured, there is no intermediate server
