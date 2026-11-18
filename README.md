@@ -187,6 +187,16 @@ Test: `test-chat-focus-restore.js` (groups C, R, D, W).
 
 Test: `test-caret-anchor.js` (groups A and S).
 
+## 🆕 v1.7.4 — fix: still no caret after closing the free-prompt chat (Thunderbird)
+
+**Symptom:** Closing the free-prompt window left the mail body without a visible caret; typing still worked. It also happened without copying an answer first.
+
+**Cause:** two gaps in the restore. `restoreEditorFocus` called `focus()` although the body already was `document.activeElement` after the overlay was removed, and Gecko skips its focus handling for an already-focused element, so the editor never got a real focus event and painted no caret. In addition, the captured caret could be empty when the compose toolbar popup had taken the focus and the live selection before the chat opened, in which case the restore only jumped to the end of the field.
+
+**Fix:** the restore forces a real blur/focus cycle when the field is already active, the follow-up passes now check that the caret actually sits in a text node (not at the editing-host level) and run up to 600 ms, and the last caret inside the field is remembered on every `selectionchange` as a fallback for an empty live selection. The build also logs one `[LLM caret] …` line per chat open/close to the Browser Console while this case is being confirmed.
+
+Test: `test-chat-focus-restore.js` (C5/C6, R9/R10 new).
+
 ## 🔒 Privacy & Security Notes
 
 - **No data collection**: The extension collects nothing. API calls go directly from your browser to the endpoint you configured, there is no intermediate server

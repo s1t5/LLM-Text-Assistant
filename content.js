@@ -465,6 +465,10 @@
     document.addEventListener('pointerdown', () => { userInteractToken++; }, true);
     document.addEventListener('keydown', () => { userInteractToken++; }, true);
 
+    // Keep the last caret inside the active field: the compose toolbar popup
+    // can empty the live selection before the chat opens.
+    document.addEventListener('selectionchange', rememberFieldCaret);
+
     // Frame focus tracking (all_frames): when focus moves to another frame,
     // this frame never sees a click that would hide the icon — hide it on
     // window blur instead. activeInputElement is kept: the Thunderbird
@@ -2833,6 +2837,10 @@
   // The chat input takes the focus; without restoring this, closing the chat
   // leaves the document without an editable target (see restoreEditorFocus).
   let pendingCaretRange = null;
+  // Last caret seen inside the active field. Thunderbird's compose toolbar
+  // popup takes the focus before the chat opens, which can leave the live
+  // selection empty; captureCaretRange falls back to this snapshot.
+  let lastFieldCaret = null;
   let chatStreamingBubble = null;
   let chatStreamingText = "";
   let chatSendBtn = null;
@@ -2942,6 +2950,7 @@
     // closing the window must hand it back (Thunderbird: the compose body IS
     // document.body — losing the caret there makes the mail uneditable).
     pendingCaretRange = captureCaretRange(pendingElement);
+    logCaretState('open:captured' + (pendingCaretRange ? '(range)' : '(none)'), pendingElement);
 
     hideActionMenu();
     hideFloatingIcon();
@@ -3555,6 +3564,7 @@
     // Take the selection out of the chat's shadow tree before that subtree
     // is removed (see dropUiSelection).
     dropUiSelection();
+    logCaretState('close:before-restore', focusTarget);
     if (chatWindow) {
       chatWindow.remove();
       chatWindow = null;
@@ -3565,6 +3575,7 @@
       chatInputField = null;
     }
     restoreEditorFocus(focusTarget, caretRange, opts);
+    logCaretState('close:after-restore', focusTarget);
     // The chat hid the icon when it opened; bring it back now that the editor
     // owns the focus again (cancel path; applyLastResult shows it as well).
     if (focusTarget && isNodeInDocument(focusTarget)) {
@@ -3608,19 +3619,43 @@
 
   // Remember the caret/selection inside `el` so a UI overlay that takes the
   // focus (free-prompt chat) can hand it back afterwards. Returns null when
-  // the selection does not live inside the field.
+  // the selection does not live inside the field and no earlier snapshot does.
   function captureCaretRange(el) {
     try {
+      if (!el) return null;
       const selection = window.getSelection();
-      if (!el || !selection || selection.rangeCount === 0) return null;
-      const range = selection.getRangeAt(0);
-      if (!range) return null;
-      const node = range.commonAncestorContainer;
-      if (node !== el && !el.contains(node)) return null;
-      return range.cloneRange();
+      if (selection && selection.rangeCount > 0) {
+        const range = selection.getRangeAt(0);
+        if (range) {
+          const node = range.commonAncestorContainer;
+          if (node === el || el.contains(node)) return range.cloneRange();
+        }
+      }
+      // Live selection gone or outside the field (toolbar popup, context menu):
+      // use the last caret this field had.
+      if (lastFieldCaret && lastFieldCaret.el === el && lastFieldCaret.range &&
+          isNodeInDocument(lastFieldCaret.range.startContainer)) {
+        return lastFieldCaret.range.cloneRange();
+      }
+      return null;
     } catch (e) {
       return null;
     }
+  }
+
+  // selectionchange handler: keep a snapshot of the caret inside the active
+  // field, so a later overlay can restore it even if the live selection is
+  // empty by then.
+  function rememberFieldCaret() {
+    try {
+      const el = activeInputElement;
+      if (!el || !isNodeInDocument(el)) return;
+      const selection = window.getSelection();
+      if (!selection || selection.rangeCount === 0) return;
+      const node = selection.anchorNode;
+      if (!node || !(node === el || el.contains(node))) return;
+      lastFieldCaret = { el: el, range: selection.getRangeAt(0).cloneRange() };
+    } catch (e) { /* ignore */ }
   }
 
   // Hand focus and caret back to `el` after an overlay closed. Removing the
@@ -3631,11 +3666,47 @@
   // falls back to the end of the field.
   function restoreEditorFocus(el, range, opts) {
     if (!el || !isNodeInDocument(el)) return;
-    try {
-      el.focus({ preventScroll: true });
-    } catch (e) {
-      try { el.focus(); } catch (e2) { /* ignore */ }
-    }
+
+    // Gecko skips its focus handling when the element already is the active
+    // one. The chat's shadow root took the focus, and removing it leaves
+    // activeElement on the body again — so a plain focus() is a no-op, no
+    // focus event reaches the editor, and the editor keeps its "unfocused"
+    // state: it paints no caret although typing works. A real focus cycle
+    // forces the focus event the editor listens to.
+    // body.blur() alone is not reliable either (Gecko keeps the body as the
+    // active element), so the focus is parked on a temporary offscreen sink
+    // first. The sink lives outside <body> because in Thunderbird the compose
+    // body IS the editable content.
+    const focusField = (forceCycle) => {
+      if (forceCycle && document.activeElement === el &&
+          typeof document.createElement === 'function') {
+        let sink = null;
+        try {
+          sink = document.createElement('input');
+          sink.setAttribute('tabindex', '-1');
+          sink.style.cssText = 'position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0;';
+          const root = document.documentElement || document.body;
+          root.appendChild(sink);
+          sink.focus({ preventScroll: true });
+          el.focus({ preventScroll: true });
+          return;
+        } catch (e) {
+          /* fall back to blur() below */
+        } finally {
+          try { if (sink && sink.remove) sink.remove(); } catch (e2) { /* ignore */ }
+        }
+      }
+      try {
+        if (forceCycle && document.activeElement === el) el.blur();
+      } catch (e) { /* ignore */ }
+      try {
+        el.focus({ preventScroll: true });
+      } catch (e) {
+        try { el.focus(); } catch (e2) { /* ignore */ }
+      }
+    };
+
+    focusField(false);
     if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
       return; // focus() restores the element's own selection state
     }
@@ -3665,39 +3736,72 @@
     // changed, and they do it asynchronously (same behaviour class as their
     // execCommand handling, see scheduleFrameworkPasteWrite). Removing the
     // chat overlay is such a change — it is a child of the compose body — so
-    // the caret restored above can be overwritten a moment later and end up
-    // on a node that is no longer part of the mail. The caret is then
+    // the caret restored above can be overwritten a moment later, or moved to
+    // the editing-host level where Gecko cannot keep it. The caret is then
     // invisible although typing still works (the editor keeps its own).
-    // Re-assert once after the editor had its turn. Guarded so it never
+    // Re-assert a few times after the editor had its turn. Guarded so it never
     // fights the user: only while the field still owns the focus and only
-    // while the selection is not already inside the field (a click or a
+    // while the caret is not already usable inside the field (a click or a
     // keystroke in the meantime puts it there and wins).
+    let pass = 0;
     const reassert = () => {
-      if (!isNodeInDocument(el)) return;
-      if (!fieldOwnsFocus(el)) return;
-      if (selectionLivesIn(el)) return;
+      pass++;
+      if (!isNodeInDocument(el)) return logCaretState('reassert#' + pass + ':detached', el);
+      if (!fieldOwnsFocus(el)) return logCaretState('reassert#' + pass + ':focus-elsewhere', el);
+      if (caretIsUsable(el)) return logCaretState('reassert#' + pass + ':ok', el);
+      // Second pass: wake the editor with a real focus cycle before setting
+      // the selection again (see focusField above).
+      if (pass >= 2) focusField(true);
       applyCaret();
+      logCaretState('reassert#' + pass + ':fixed', el);
     };
     const raf = (typeof requestAnimationFrame === 'function')
       ? requestAnimationFrame
       : (cb) => setTimeout(cb, 16);
     raf(() => raf(() => setTimeout(reassert, 0)));
     setTimeout(reassert, 200);
+    setTimeout(reassert, 600);
   }
 
-  // Whether the live selection is anchored inside `el`. A selection parked in
-  // the extension's shadow root (text the user selected in the chat to copy
-  // it) is NOT inside the field: the host div is a child of the compose body,
-  // but shadow content is a separate tree.
-  function selectionLivesIn(el) {
+  // Whether the caret is somewhere the engine can actually keep and paint it:
+  // inside a text node (or a nested element) of the field. An editing-host
+  // level caret (anchorNode === el) is not usable in Gecko — it normalizes it
+  // to the start of the field on the next keystroke (v1.7.3), and behind the
+  // extension's UI host it is not painted at all.
+  function caretIsUsable(el) {
     try {
       const selection = window.getSelection();
       if (!selection || selection.rangeCount === 0) return false;
       const node = selection.anchorNode;
-      return !!(node && (node === el || el.contains(node)));
+      if (!node || !node.isConnected) return false;
+      if (node === el) return false;
+      if (node.nodeType === 3) return node === el || el.contains(node);
+      return el.contains(node);
     } catch (e) {
       return false;
     }
+  }
+
+  // One compact line per chat close (and per failed re-assert) so a
+  // Thunderbird report can be diagnosed without guessing. Prefixed and cheap;
+  // remove once the caret handling is confirmed in the field.
+  function logCaretState(tag, el) {
+    try {
+      const sel = window.getSelection();
+      const r = (sel && sel.rangeCount) ? sel.getRangeAt(0) : null;
+      const active = document.activeElement;
+      console.log('[LLM caret] ' + tag, {
+        active: active ? (active.tagName + (active.id ? '#' + active.id : '')) : null,
+        docHasFocus: (typeof document.hasFocus === 'function') ? document.hasFocus() : null,
+        rangeCount: sel ? sel.rangeCount : null,
+        anchor: r && r.startContainer ? (r.startContainer.nodeName + '/' + r.startContainer.nodeType) : null,
+        offset: r ? r.startOffset : null,
+        collapsed: r ? r.collapsed : null,
+        inField: !!(el && r && r.startContainer && (r.startContainer === el || el.contains(r.startContainer))),
+        field: el ? (el.tagName + (el.id ? '#' + el.id : '')) : null,
+        textLen: (el && typeof el.textContent === 'string') ? el.textContent.length : null
+      });
+    } catch (e) { /* ignore */ }
   }
 
   // Whether `el` (or something inside it) is the focused element. In

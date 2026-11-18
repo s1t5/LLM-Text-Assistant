@@ -650,6 +650,35 @@ Test: `test-caret-anchor.js` (A1–A7, S1–S5). Mit der alten `lastChild`-Logik
 wird A3 rot mit `afterNode=llm-assistant-ui-host`, also genau dem Zustand aus
 dem Bugreport.
 
+## v1.7.4 — Cursor nach dem Schließen des Free-Prompt-Chats weiter unsichtbar
+
+**Symptom:** Nach dem Schließen des Free-Prompt-Fensters war im Mail-Body kein
+Cursor zu sehen; Tippen funktionierte weiter. Trat auch ohne vorheriges
+Kopieren auf.
+
+**Ursache (zwei Lücken im bisherigen Restore):**
+1. `restoreEditorFocus` rief `el.focus()` auf, obwohl der Body nach dem
+   Entfernen des Overlays bereits `document.activeElement` war. Gecko
+   überspringt die Focus-Behandlung für das schon fokussierte Element, der
+   Editor bekommt also kein echtes Focus-Ereignis und malt keinen Caret.
+2. `captureCaretRange` konnte leer bleiben, wenn das Compose-Toolbar-Popup vor
+   dem Öffnen den Fokus und die Live-Selection genommen hatte. Dann sprang der
+   Restore nur ans Feldende.
+
+**Fix (v1.7.4):**
+- `restoreEditorFocus` macht einen echten Blur/Focus-Zyklus, wenn das Feld
+  schon das aktive Element ist (ab dem zweiten Nachlauf-Durchgang).
+- Der Nachlauf prüft `caretIsUsable` (Caret in einem Textknoten bzw.
+  verschachtelten Element, nicht auf Editing-Host-Ebene) und läuft bis 600 ms.
+- `rememberFieldCaret` merkt sich bei jedem `selectionchange` den letzten Caret
+  im aktiven Feld; `captureCaretRange` fällt darauf zurück, wenn die
+  Live-Selection leer ist.
+- Diagnose: `logCaretState` schreibt beim Öffnen, vor und nach dem Restore sowie
+  bei jedem fehlgeschlagenen Nachlauf eine Zeile `[LLM caret] …` in die
+  Browser-Konsole. Temporär, bis der Fall in Thunderbird bestätigt ist.
+
+Test: `test-chat-focus-restore.js` (C5/C6, R9/R10 neu).
+
 ## Mehrsprachigkeit (i18n)
 
 Die Extension ist vollständig internationalisiert (aktuell Deutsch + Englisch).

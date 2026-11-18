@@ -56,14 +56,17 @@ const check = (label, ok, detail) => {
   const outsideNode = { isConnected: true, nodeType: 3, length: 5 };
   const el = { tagName: 'DIV', isContentEditable: true, contains(n) { return n === node; } };
 
-  const run = (range, rangeCount) => {
+  const run = (range, rangeCount, memory) => {
     const win = {
       getSelection: () => ({
         rangeCount: rangeCount === undefined ? (range ? 1 : 0) : rangeCount,
         getRangeAt: () => range
       })
     };
-    const fn = new Function('window', extractFn('captureCaretRange') + '\nreturn captureCaretRange;')(win);
+    const fn = new Function('window', 'isNodeInDocument', 'lastFieldCaret',
+      extractFn('captureCaretRange') + '\nreturn captureCaretRange;')(
+      win, (n) => !!(n && n.isConnected), memory === undefined ? null : memory
+    );
     return fn(el);
   };
 
@@ -83,6 +86,22 @@ const check = (label, ok, detail) => {
   check('C2 caret outside the field is not captured', run(outside) === null);
   check('C3 no selection -> null', run(null) === null);
   check('C4 rangeCount 0 -> null', run(inside, 0) === null);
+
+  // Toolbar popup emptied the live selection: the remembered caret wins.
+  const remembered = {
+    startContainer: { isConnected: true },
+    commonAncestorContainer: { isConnected: true },
+    cloneRange() { return { remembered: true }; }
+  };
+  const r5 = run(null, 0, { el, range: remembered });
+  check('C5 empty live selection falls back to the remembered caret',
+    !!(r5 && r5.remembered));
+
+  const r6 = run(null, 0, {
+    el,
+    range: { startContainer: { isConnected: false }, cloneRange() { return { stale: true }; } }
+  });
+  check('C6 stale memory is not used', r6 === null);
 }
 
 // --- R: restoreEditorFocus --------------------------------------------------
@@ -91,15 +110,17 @@ const check = (label, ok, detail) => {
 // demand — that is what the async re-assert needs.
 function runRestore(opts) {
   opts = opts || {};
-  const calls = { focus: 0, addRange: 0, anchored: 0, removeAll: 0 };
-  const node = { isConnected: opts.nodeConnected !== false, nodeName: '#text' };
-  const detached = { isConnected: false, nodeName: '#text' };
+  const calls = { focus: 0, addRange: 0, anchored: 0, removeAll: 0, blur: 0, sinkFocus: 0, sinkRemoved: 0 };
+  const node = { isConnected: opts.nodeConnected !== false, nodeName: '#text', nodeType: 3 };
+  const detached = { isConnected: false, nodeName: '#text', nodeType: 3 };
   const el = {
     tagName: opts.tagName || 'DIV',
     isContentEditable: opts.ce !== false,
     isConnected: opts.elConnected !== false,
+    nodeType: 1,
     contains(n) { return n === node || n === el; },
-    focus() { calls.focus++; }
+    focus() { calls.focus++; },
+    blur() { calls.blur++; }
   };
   const selState = { ranges: [], anchorNode: null };
   const selection = {
@@ -112,20 +133,30 @@ function runRestore(opts) {
     activeElement: opts.activeElement === undefined ? el : opts.activeElement,
     body: opts.body || el
   };
+  if (!opts.noCreateElement) {
+    doc.createElement = () => ({
+      setAttribute() {},
+      style: {},
+      focus() { calls.sinkFocus++; },
+      remove() { calls.sinkRemoved++; }
+    });
+    doc.documentElement = { appendChild() {} };
+  }
   const timers = [];
   const factory = new Function(
-    'window', 'document', 'isNodeInDocument', 'anchorCaretAtEnd',
+    'window', 'document', 'isNodeInDocument', 'anchorCaretAtEnd', 'logCaretState',
     'requestAnimationFrame', 'setTimeout', `
-    ${extractFn('selectionLivesIn')}
+    ${extractFn('caretIsUsable')}
     ${extractFn('fieldOwnsFocus')}
     ${extractFn('restoreEditorFocus')}
-    return { restoreEditorFocus, selectionLivesIn, fieldOwnsFocus };
+    return { restoreEditorFocus, caretIsUsable, fieldOwnsFocus };
   `);
   const api = factory(
     { getSelection: () => selection },
     doc,
     (n) => !!(n && n.isConnected),
     () => { calls.anchored++; selState.anchorNode = el; selState.ranges = [{ startContainer: el }]; },
+    () => {},
     (cb) => { timers.push(cb); return timers.length; },
     (cb) => { timers.push(cb); return timers.length; }
   );
@@ -205,6 +236,36 @@ function runRestore(opts) {
   check('R8 apply path schedules no re-assert',
     applied.timers.length === 0 && applied.calls.addRange === 1,
     'timers=' + applied.timers.length);
+
+  // An editing-host-level caret (anchorNode === field) is exactly the state
+  // Gecko cannot keep: it must be re-anchored into a text node.
+  const hostLevel = runRestore({});
+  hostLevel.selState.anchorNode = hostLevel.el;
+  hostLevel.selState.ranges = [{ startContainer: hostLevel.el }];
+  hostLevel.runTimers();
+  check('R9 an editing-host-level caret is re-anchored',
+    hostLevel.calls.addRange === 2 && hostLevel.selState.anchorNode === hostLevel.node,
+    'addRange=' + hostLevel.calls.addRange);
+
+  // If re-anchoring still leaves an unusable caret (stale range -> end
+  // anchor), the second pass forces a real focus cycle to wake the editor.
+  const cycle = runRestore({
+    range: { startContainer: { isConnected: false }, commonAncestorContainer: { isConnected: false } }
+  });
+  cycle.runTimers();
+  check('R10 second pass forces a focus cycle through the offscreen sink',
+    cycle.calls.sinkFocus >= 1 && cycle.calls.sinkRemoved >= 1 && cycle.calls.anchored >= 3,
+    'sinkFocus=' + cycle.calls.sinkFocus + ' anchored=' + cycle.calls.anchored);
+
+  // No createElement available (or it throws): the blur() fallback must run.
+  const fallback = runRestore({
+    noCreateElement: true,
+    range: { startContainer: { isConnected: false }, commonAncestorContainer: { isConnected: false } }
+  });
+  fallback.runTimers();
+  check('R11 focus cycle falls back to blur() without createElement',
+    fallback.calls.blur >= 1 && fallback.calls.anchored >= 3,
+    'blur=' + fallback.calls.blur + ' anchored=' + fallback.calls.anchored);
 }
 
 // --- D: dropUiSelection -----------------------------------------------------
@@ -258,7 +319,7 @@ function runDrop(opts) {
 function makeClose() {
   const seen = [];
   const events = [];
-  const factory = new Function('restoreEditorFocus', 'isNodeInDocument', 'showFloatingIcon', 'dropUiSelection', `
+  const factory = new Function('restoreEditorFocus', 'isNodeInDocument', 'showFloatingIcon', 'dropUiSelection', 'logCaretState', `
     let currentRequestId = null;
     let cancelCurrentRequest = () => {};
     let chatWindow = null, chatMessages = [], chatStreamingBubble = null, chatStreamingText = "";
@@ -281,7 +342,8 @@ function makeClose() {
     (el, range, opts) => seen.push({ el, range, opts }),
     () => true,
     () => {},
-    () => events.push('drop')
+    () => events.push('drop'),
+    () => {}
   );
   api.seen = seen;
   api.events = events;
