@@ -3719,6 +3719,65 @@
     } catch (e) { /* ignore */ }
   }
 
+  // Make the editor take ownership of the caret by performing a real edit.
+  // The apply path works because it writes the field; a plain selection write
+  // does not make a Gecko editor re-sync its internal caret. So: insert a
+  // zero-width space at the caret, drop the selection right behind it and
+  // remove it again in the same task. Net effect on the text is none, and a
+  // direct DOM write is not an editor transaction, so the undo stack stays
+  // clean. Returns true when the nudge was applied.
+  function nudgeEditorAtCaret(el, range) {
+    try {
+      const selection = window.getSelection();
+      let target = null;
+      if (range && isNodeInDocument(range.startContainer) &&
+          (el === range.startContainer || el.contains(range.commonAncestorContainer))) {
+        target = range.cloneRange();
+      } else if (selection && selection.rangeCount > 0) {
+        const live = selection.getRangeAt(0);
+        if (live && (live.startContainer === el || el.contains(live.startContainer))) {
+          target = live.cloneRange();
+        }
+      }
+      if (!target) return false;
+      target.collapse(false);
+      const zwsp = document.createTextNode('\u200B');
+      target.insertNode(zwsp);
+      const after = document.createRange();
+      after.setStartAfter(zwsp);
+      after.collapse(true);
+      if (selection) {
+        selection.removeAllRanges();
+        selection.addRange(after);
+      }
+      zwsp.remove();
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // Last resort: the same edit, but through the editor itself. This is the
+  // closest a content script gets to the apply path (the editor records a
+  // transaction and takes the caret), at the price of two undo steps, so it
+  // only runs when the state is demonstrably broken.
+  function nudgeEditorByCommand(el, applyCaret) {
+    try {
+      applyCaret();
+      const before = (typeof el.textContent === 'string') ? el.textContent.length : null;
+      document.execCommand('insertText', false, '\u200B');
+      const after = (typeof el.textContent === 'string') ? el.textContent.length : null;
+      // Remove the character only when the insert actually landed. A failed
+      // insert followed by a delete would eat a real character of the mail.
+      if (before !== null && after === before + 1) {
+        document.execCommand('delete', false, null);
+      }
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
   // Hand focus and caret back to `el` after an overlay closed. Removing the
   // focused overlay element leaves document.activeElement on <body>; in
   // Thunderbird document.body IS the compose body, so the mail lost its caret
@@ -3798,6 +3857,11 @@
     };
 
     applyCaret();
+    // A selection write alone does not wake a Gecko editor; a real (net zero)
+    // edit does, which is why the apply path keeps its caret (see
+    // nudgeEditorAtCaret).
+    nudgeEditorAtCaret(el, range);
+    applyCaret();
 
     // Callers that just rewrote the field ("apply") already anchored the
     // caret themselves, and the staged framework write may still be running.
@@ -3840,7 +3904,17 @@
       // Stopping at the first usable caret is exactly what missed the late
       // clobber this loop exists for.
       if (pass === 2) focusField(true);
-      applyCaret();
+      // The nudge is the part that mirrors the apply path, so it runs on every
+      // pass: if the editor re-syncs late, a fresh real edit follows it.
+      if (nudgeEditorAtCaret(el, range)) {
+        // Once per close, on the escalation pass: the same edit through the
+        // editor itself (a real transaction, which is what the apply path
+        // produces). Costs two undo steps, so it runs a single time.
+        if (pass === 2) nudgeEditorByCommand(el, applyCaret);
+        applyCaret();
+      } else {
+        applyCaret();
+      }
       logCaretState('reassert#' + pass + (usableBefore ? ':was-usable' : ':was-broken') +
         (focused ? '' : '-nofocus'), el);
     };
@@ -3888,7 +3962,10 @@
         collapsed: r ? r.collapsed : null,
         inField: !!(el && r && r.startContainer && (r.startContainer === el || el.contains(r.startContainer))),
         field: el ? (el.tagName + (el.id ? '#' + el.id : '')) : null,
-        textLen: (el && typeof el.textContent === 'string') ? el.textContent.length : null
+        textLen: (el && typeof el.textContent === 'string') ? el.textContent.length : null,
+        zwsp: (el && typeof el.textContent === 'string')
+          ? (el.textContent.match(/\u200B/g) || []).length
+          : null
       });
     } catch (e) { /* ignore */ }
   }

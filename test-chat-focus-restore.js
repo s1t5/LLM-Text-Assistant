@@ -110,7 +110,7 @@ const check = (label, ok, detail) => {
 // demand — that is what the async re-assert needs.
 function runRestore(opts) {
   opts = opts || {};
-  const calls = { focus: 0, addRange: 0, anchored: 0, removeAll: 0, blur: 0, sinkFocus: 0, sinkRemoved: 0 };
+  const calls = { focus: 0, addRange: 0, anchored: 0, removeAll: 0, blur: 0, sinkFocus: 0, sinkRemoved: 0, nudge: 0, nudgeCmd: 0 };
   const node = { isConnected: opts.nodeConnected !== false, nodeName: '#text', nodeType: 3 };
   const detached = { isConnected: false, nodeName: '#text', nodeType: 3 };
   const el = {
@@ -147,7 +147,7 @@ function runRestore(opts) {
   const timers = [];
   const factory = new Function(
     'window', 'document', 'isNodeInDocument', 'anchorCaretAtEnd', 'logCaretState',
-    'requestAnimationFrame', 'setTimeout', `
+    'requestAnimationFrame', 'setTimeout', 'nudgeEditorAtCaret', 'nudgeEditorByCommand', `
     let userInteractToken = 0;
     ${extractFn('caretIsUsable')}
     ${extractFn('fieldOwnsFocus')}
@@ -164,7 +164,9 @@ function runRestore(opts) {
     () => { calls.anchored++; selState.anchorNode = el; selState.ranges = [{ startContainer: el }]; },
     () => {},
     (cb) => { timers.push(cb); return timers.length; },
-    (cb) => { timers.push(cb); return timers.length; }
+    (cb) => { timers.push(cb); return timers.length; },
+    () => { calls.nudge++; return true; },
+    () => { calls.nudgeCmd++; return true; }
   );
 
   const range = opts.range === undefined
@@ -191,14 +193,15 @@ function runRestore(opts) {
 {
   const live = runRestore({});
   check('R1 live range: focus + range restored, no end-anchor',
-    live.calls.focus === 1 && live.calls.addRange === 1 && live.calls.anchored === 0,
+    live.calls.focus === 1 && live.calls.addRange === 2 && live.calls.anchored === 0 &&
+      live.calls.nudge === 1,
     JSON.stringify(live.calls));
 
   const stale = runRestore({
     range: { startContainer: { isConnected: false }, commonAncestorContainer: { isConnected: false } }
   });
   check('R2 stale range: focus + caret anchored at end',
-    stale.calls.focus === 1 && stale.calls.addRange === 0 && stale.calls.anchored === 1,
+    stale.calls.focus === 1 && stale.calls.addRange === 0 && stale.calls.anchored === 2,
     JSON.stringify(stale.calls));
 
   const input = runRestore({ tagName: 'TEXTAREA', ce: false });
@@ -229,7 +232,7 @@ function runRestore(opts) {
   keep.selState.ranges = [{ startContainer: keep.node }];
   keep.runTimers();
   check('R6 every pass re-applies the caret (late clobber wins nothing)',
-    keep.calls.addRange === 4, 'addRange=' + keep.calls.addRange);
+    keep.calls.addRange === 5 && keep.calls.nudge === 4 && keep.calls.nudgeCmd === 1, 'addRange=' + keep.calls.addRange);
 
   // ...but a real user interaction stops the loop immediately.
   const touched = runRestore({});
@@ -238,7 +241,7 @@ function runRestore(opts) {
   touched.api.bumpUser();
   touched.runTimers();
   check('R6b user interaction cancels the re-assert loop',
-    touched.calls.addRange === 1, 'addRange=' + touched.calls.addRange);
+    touched.calls.addRange === 2 && touched.calls.nudge === 1, 'addRange=' + touched.calls.addRange);
 
   // Focus moved on (e.g. the user clicked the subject line): leave it alone.
   const moved = runRestore({});
@@ -247,13 +250,14 @@ function runRestore(opts) {
   moved.selState.ranges = [{ startContainer: moved.detached }];
   moved.runTimers();
   check('R7 re-assert is skipped once another field has the focus',
-    moved.calls.addRange === 1, 'addRange=' + moved.calls.addRange);
+    moved.calls.addRange === 2 && moved.calls.nudge === 1, 'addRange=' + moved.calls.addRange);
 
   // The apply path rewrites the field and anchors the caret itself; its
   // staged framework write may still run, so no delayed selection change.
   const applied = runRestore({ reassert: false });
   check('R8 apply path schedules no re-assert',
-    applied.timers.length === 0 && applied.calls.addRange === 1,
+    applied.timers.length === 0 && applied.calls.addRange === 2 && applied.calls.nudge === 1 &&
+      applied.calls.nudgeCmd === 0,
     'timers=' + applied.timers.length);
 
   // An editing-host-level caret (anchorNode === field) is exactly the state
@@ -273,7 +277,7 @@ function runRestore(opts) {
   });
   cycle.runTimers();
   check('R10 second pass forces a focus cycle through the offscreen sink',
-    cycle.calls.sinkFocus >= 1 && cycle.calls.sinkRemoved >= 1 && cycle.calls.anchored === 4,
+    cycle.calls.sinkFocus >= 1 && cycle.calls.sinkRemoved >= 1 && cycle.calls.anchored === 5,
     'sinkFocus=' + cycle.calls.sinkFocus + ' anchored=' + cycle.calls.anchored);
 
   // No createElement available (or it throws): the blur() fallback must run.
@@ -283,7 +287,7 @@ function runRestore(opts) {
   });
   fallback.runTimers();
   check('R11 focus cycle falls back to blur() without createElement',
-    fallback.calls.blur >= 1 && fallback.calls.anchored === 4,
+    fallback.calls.blur >= 1 && fallback.calls.anchored === 5,
     'blur=' + fallback.calls.blur + ' anchored=' + fallback.calls.anchored);
 
   // An unfocused document paints no caret at all (Gecko's caret needs the
@@ -297,6 +301,86 @@ function runRestore(opts) {
   focused.runTimers();
   check('R13 a focused document is left alone',
     focused.windowFocus === 0, 'windowFocus=' + focused.windowFocus);
+}
+
+// --- N: nudge (zero-width space edit) --------------------------------------
+function runNudge(opts) {
+  opts = opts || {};
+  const calls = { insert: 0, removed: 0, addRange: 0, removeAll: 0, setStartAfter: 0, created: 0 };
+  const zwsp = {
+    nodeType: 3, isConnected: true, data: '\u200B',
+    remove() { calls.removed++; }
+  };
+  const textNode = { nodeType: 3, isConnected: true, data: 'Hallo Welt' };
+  const el = { nodeType: 1, textContent: 'Hallo Welt', contains(n) { return n === textNode || n === zwsp; } };
+  const range = {
+    startContainer: opts.outside ? { nodeType: 1, isConnected: true } : textNode,
+    commonAncestorContainer: opts.outside ? { nodeType: 1, isConnected: true } : textNode,
+    cloneRange() { return range; },
+    collapse() {},
+    insertNode(n) { calls.insert++; calls.inserted = n; }
+  };
+  const after = {
+    setStartAfter(n) { calls.setStartAfter++; calls.afterNode = n; },
+    collapse() {}
+  };
+  const selection = {
+    rangeCount: opts.rangeCount === undefined ? 1 : opts.rangeCount,
+    getRangeAt: () => range,
+    removeAllRanges() { calls.removeAll++; },
+    addRange(r) { calls.addRange++; calls.added = r; }
+  };
+  const doc = {
+    createTextNode(d) { calls.created++; return zwsp; },
+    createRange: () => after,
+    execCommand(cmd, ui, value) {
+      calls.commands = (calls.commands || []).concat([[cmd, value]]);
+      if (cmd === 'insertText' && opts.insertWorks !== false) el.textContent += value;
+      if (cmd === 'delete') el.textContent = el.textContent.slice(0, -1);
+      return true;
+    }
+  };
+  const factory = new Function('window', 'document', 'isNodeInDocument', `
+    ${extractFn('nudgeEditorAtCaret')}
+    ${extractFn('nudgeEditorByCommand')}
+    return { nudgeEditorAtCaret, nudgeEditorByCommand };
+  `);
+  const api = factory({ getSelection: () => selection }, doc, () => true);
+  const ok = api.nudgeEditorAtCaret(el, opts.range === undefined ? range : opts.range);
+  return { ok, calls, zwsp, el, range, api, selection };
+}
+
+{
+  const n = runNudge();
+  check('N1 nudge inserts a zero-width space and removes it again',
+    n.ok && n.calls.insert === 1 && n.calls.removed === 1 && n.calls.inserted === n.zwsp,
+    JSON.stringify(n.calls));
+  check('N2 selection is parked right behind the inserted node',
+    n.calls.setStartAfter === 1 && n.calls.addRange === 1 && n.calls.afterNode === n.zwsp,
+    'setStartAfter=' + n.calls.setStartAfter + ' addRange=' + n.calls.addRange);
+
+  const outside = runNudge({ outside: true, rangeCount: 0 });
+  check('N3 no usable caret -> no mutation', outside.ok === false && outside.calls.insert === 0,
+    JSON.stringify(outside.calls));
+
+  // The command path is the last resort: a real editor transaction.
+  const c = runNudge();
+  let applied = 0;
+  const okCmd = c.api.nudgeEditorByCommand(c.el, () => { applied++; });
+  const cmds = (c.calls.commands || []).map((x) => x[0]).join(',');
+  check('N4 command nudge inserts and deletes the zero-width space',
+    okCmd && applied === 1 && cmds === 'insertText,delete' &&
+      (c.calls.commands[0][1] === '\u200B'),
+    'commands=' + cmds + ' value=' + JSON.stringify(c.calls.commands && c.calls.commands[0][1]));
+
+  // If the insert did not land (unsupported command, selection outside the
+  // editor) the delete must NOT run: it would eat a real character.
+  const noInsert = runNudge({ insertWorks: false });
+  const okNo = noInsert.api.nudgeEditorByCommand(noInsert.el, () => {});
+  const cmdsNo = (noInsert.calls.commands || []).map((x) => x[0]).join(',');
+  check('N5 failed insert -> no delete (no character lost)',
+    okNo === true && cmdsNo === 'insertText' && noInsert.el.textContent === 'Hallo Welt',
+    'commands=' + cmdsNo + ' text=' + JSON.stringify(noInsert.el.textContent));
 }
 
 // --- D: dropUiSelection -----------------------------------------------------

@@ -205,6 +205,14 @@ Test: `test-chat-focus-restore.js` (C5/C6, R9/R10 new).
 
 Test: `test-chat-focus-restore.js` (R6/R6b, R10–R13 new).
 
+## 🆕 v1.7.7 — fix: give the editor a real edit on close (zero-width space nudge)
+
+A selection write alone does not wake a Gecko editor, which is exactly why the apply path keeps its caret: it writes the field. The close path now performs the same kind of edit with no visible result: it inserts a zero-width space (U+200B) at the caret, parks the selection right behind it and removes it again in the same task, then re-applies the caret. Net effect on the text is none, the browser console log proves it (`zwsp: 0`), and because a direct DOM write is not an editor transaction the undo stack stays clean.
+
+On the escalation pass (200 ms) the same edit also goes through the editor itself (`execCommand('insertText')` plus `execCommand('delete')`), which is the closest a content script gets to what the apply path does. That variant costs two undo steps, so it runs once per close.
+
+Test: `test-chat-focus-restore.js` (N1–N4 new; N1/N2 red without the nudge, R6 asserts the nudge runs on every pass).
+
 ## 🔒 Privacy & Security Notes
 
 - **No data collection**: The extension collects nothing. API calls go directly from your browser to the endpoint you configured, there is no intermediate server
