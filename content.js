@@ -3992,20 +3992,20 @@
   // Thunderbird's HTMLEditor) would reset the caret to the field start on
   // the next keystroke.
   // The caret goes into the last TEXT node of the real content, never behind
-  // the extension's UI host: in Thunderbird that host is a child of the
-  // compose body, and a caret behind it sits at the editing-host level, where
-  // Gecko cannot keep it and moves it to the start of the mail.
+  // the extension's UI host and never behind a trailing <br> placeholder or an
+  // empty trailing block: in Thunderbird that host is a child of the compose
+  // body, and a caret at that level sits on the EDITING-HOST level, where
+  // Gecko cannot keep it and moves it to the start of the mail on the next
+  // keystroke. Results that end with a line break leave exactly such a
+  // trailing <br>/empty paragraph, so the anchor walks the whole field from
+  // the end instead of only looking at el.lastChild.
   function anchorCaretAtEnd(el) {
     try {
       const selection = window.getSelection();
       const range = document.createRange();
-      let last = el.lastChild;
-      while (last && isUiNode(last)) last = last.previousSibling;
-      const textNode = lastTextNodeIn(last);
+      const textNode = lastTextNodeIn(el);
       if (textNode) {
         range.setStart(textNode, textNode.length);
-      } else if (last) {
-        range.setStartAfter(last);
       } else {
         range.setStart(el, 0);
       }
@@ -4026,10 +4026,12 @@
     }
   }
 
-  // Deepest last text node of a subtree, skipping the extension UI.
+  // Deepest last text node of a subtree, skipping the extension UI. Empty
+  // text nodes are skipped as well: a caret inside a zero-length node is the
+  // host-level position in disguise (nothing to hold it).
   function lastTextNodeIn(node) {
     if (!node) return null;
-    if (node.nodeType === 3) return node;
+    if (node.nodeType === 3) return node.length > 0 ? node : null;
     if (node.nodeType !== 1 || isUiNode(node)) return null;
     for (let child = node.lastChild; child; child = child.previousSibling) {
       const found = lastTextNodeIn(child);
@@ -4048,19 +4050,28 @@
   // interaction and only runs while the field still shows the result.
   function settleCaretAfterPipelineWrite(el, expectedText) {
     const token = userInteractToken;
-    const fix = () => {
-      if (token !== userInteractToken) return; // user clicked or typed first
-      if (!isNodeInDocument(el)) return;
-      if (!fieldOwnsFocus(el)) return;
-      if (!readBackMatches(el, expectedText)) return; // write not landed / edited
+    // One compact console line per write (first pass that reaches a decision):
+    // a Thunderbird report about the caret can then be read instead of guessed.
+    let logged = false;
+    const logOnce = (tag) => {
+      if (logged) return;
+      logged = true;
+      logCaretState(tag, el);
+    };
+    const fix = (pass) => {
+      if (token !== userInteractToken) return logOnce('wholefield:' + pass + ':user');
+      if (!isNodeInDocument(el)) return logOnce('wholefield:' + pass + ':detached');
+      if (!fieldOwnsFocus(el)) return logOnce('wholefield:' + pass + ':focus-elsewhere');
+      if (!readBackMatches(el, expectedText)) return logOnce('wholefield:' + pass + ':edited');
       anchorCaretAtEnd(el);
+      logOnce('wholefield:' + pass + ':anchored');
     };
     const raf = (typeof requestAnimationFrame === 'function')
       ? requestAnimationFrame
       : (cb) => setTimeout(cb, 16);
-    raf(() => raf(() => setTimeout(fix, 0)));
-    setTimeout(fix, 250);
-    setTimeout(fix, 600);
+    raf(() => raf(() => setTimeout(() => fix('raf'), 0)));
+    setTimeout(() => fix('250'), 250);
+    setTimeout(() => fix('600'), 600);
   }
 
   // Whether the node is still connected to the document. document.contains()

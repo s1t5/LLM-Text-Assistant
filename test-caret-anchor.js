@@ -13,7 +13,8 @@
 //   settleCaretAfterPipelineWrite — deferred fix-up, user interaction wins
 //
 // Groups:
-//   A — anchorCaretAtEnd: text child, nested block, UI host last, empty field
+//   A — anchorCaretAtEnd: text child, nested block, UI host last, empty field,
+//       trailing <br>/empty paragraph (a result that ends with a line break)
 //   S — settleCaretAfterPipelineWrite: fires on the result, steps aside for
 //       user interaction, lost focus or an edited field
 
@@ -131,23 +132,53 @@ function runAnchor(rootChildren, uiNode) {
 
   const emptyP = el('p', []);
   const r6 = runAnchor([emptyP]);
-  check('A6 no text at all: caret after the last block',
-    r6.state.afterNode === emptyP && r6.state.startNode === r6.root);
+  check('A6 no text at all: caret at the editing host start',
+    r6.state.startNode === r6.root && r6.state.startOffset === 0 && !r6.state.afterNode);
 
   const deep = txt('tief');
   const r7 = runAnchor([el('div', [el('p', [deep])])]);
   check('A7 nested blocks: deepest last text node wins',
     r7.state.startNode === deep && r7.state.startOffset === 4);
+
+  // A result that ends with a line break leaves a trailing <br> (soft break)
+  // or an empty paragraph behind. Anchoring behind those nodes puts the caret
+  // at the EDITING-HOST level, which Gecko normalizes to the start of the mail
+  // on the next keystroke — the exact symptom the anchor exists to prevent.
+  const trailingText = txt('Hallo');
+  const br = el('br', []);
+  const r8 = runAnchor([trailingText, br]);
+  check('A8 trailing <br>: caret in the last text node, not behind the break',
+    r8.state.startNode === trailingText && r8.state.startOffset === 5 && !r8.state.afterNode,
+    'node=' + (r8.state.startNode && r8.state.startNode.nodeType) + ' offset=' + r8.state.startOffset);
+
+  const pText = txt('Absatz');
+  const trailingEmptyBlock = el('div', [el('br', [])]);
+  const r9 = runAnchor([el('p', [pText]), trailingEmptyBlock]);
+  check('A9 trailing empty paragraph: caret in the last text node before it',
+    r9.state.startNode === pText && r9.state.startOffset === 6 && !r9.state.afterNode,
+    'node=' + (r9.state.startNode && r9.state.startNode.nodeType) + ' offset=' + r9.state.startOffset);
+
+  const emptyText = txt('');
+  const realText = txt('Rest');
+  const r10 = runAnchor([realText, emptyText]);
+  check('A10 trailing empty text node: skipped, caret in the previous text',
+    r10.state.startNode === realText && r10.state.startOffset === 4 && !r10.state.afterNode);
+
+  const inBlockText = txt('Zeile');
+  const blockWithBreak = el('div', [inBlockText, el('br', [])]);
+  const r11 = runAnchor([blockWithBreak]);
+  check('A11 last block ends with <br>: caret at the end of its text',
+    r11.state.startNode === inBlockText && r11.state.startOffset === 5 && !r11.state.afterNode);
 }
 
 // --- S: settleCaretAfterPipelineWrite --------------------------------------
 function runSettle(opts) {
   opts = opts || {};
-  const calls = { anchor: 0, checks: 0 };
+  const calls = { anchor: 0, checks: 0, logs: [] };
   const timers = [];
   const factory = new Function(
     'isNodeInDocument', 'fieldOwnsFocus', 'readBackMatches', 'anchorCaretAtEnd',
-    'requestAnimationFrame', 'setTimeout', `
+    'logCaretState', 'requestAnimationFrame', 'setTimeout', `
     let userInteractToken = 0;
     ${extractFn('settleCaretAfterPipelineWrite')}
     return {
@@ -160,6 +191,7 @@ function runSettle(opts) {
     () => opts.focused !== false,
     () => { calls.checks++; return opts.matches !== false; },
     () => { calls.anchor++; },
+    (tag) => { calls.logs.push(tag); },
     (cb) => { timers.push(cb); return timers.length; },
     (cb) => { timers.push(cb); return timers.length; }
   );
@@ -196,6 +228,21 @@ function runSettle(opts) {
   const d = runSettle({ connected: false });
   d.runTimers();
   check('S5 no fix-up for a detached field', d.calls.anchor === 0);
+
+  // Diagnostic: one compact console line per write, naming the decision, so a
+  // Thunderbird caret report can be read instead of guessed.
+  const l = runSettle({});
+  l.runTimers();
+  check('S6 one log line per write, tagged with the decision',
+    l.calls.logs.length === 1 && /:anchored$/.test(l.calls.logs[0]),
+    'logs=' + JSON.stringify(l.calls.logs));
+
+  const lu = runSettle({});
+  lu.api.bump();
+  lu.runTimers();
+  check('S7 the log names a user interaction that cancelled the fix-up',
+    lu.calls.logs.length === 1 && /:user$/.test(lu.calls.logs[0]),
+    'logs=' + JSON.stringify(lu.calls.logs));
 }
 
 console.log(fails === 0 ? 'ALL PASS' : fails + ' FAILURES');

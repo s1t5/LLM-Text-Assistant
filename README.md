@@ -213,6 +213,14 @@ On the escalation pass (200 ms) the same edit also goes through the editor itsel
 
 Test: `test-chat-focus-restore.js` (N1–N4 new; N1/N2 red without the nudge, R6 asserts the nudge runs on every pass).
 
+## 🆕 v1.7.8 — fix: caret jumped to the text start when the result ended with a line break
+
+v1.7.3 anchored the caret in the last text node, but it only inspected the field's last child. A result that ends with a line break leaves a trailing `<br>` (soft break) or an empty paragraph behind: there is no text node in that node, so the anchor fell back to `setStartAfter(last)`, an element-level position on the editing host. That is exactly the state Gecko cannot hold, and it normalizes to the start of the mail on the next keystroke, so typing landed in front of the text.
+
+The anchor now walks the whole field from the end and skips trailing `<br>` placeholders, empty blocks and zero-length text nodes; the caret always lands in the last real text node. The whole-field write path also logs one compact `[LLM caret] wholefield:<pass>:<decision>` line per action, so a remaining report can be read from the error console instead of guessed.
+
+Test: `test-caret-anchor.js` (A8–A11 new, S6/S7 for the log; A8/A9 fail on the v1.7.7 code with the caret at the editing-host level).
+
 ## 🔒 Privacy & Security Notes
 
 - **No data collection**: The extension collects nothing. API calls go directly from your browser to the endpoint you configured, there is no intermediate server
